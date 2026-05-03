@@ -1,0 +1,15 @@
+{
+  "file_format_version" : "1.0.0",
+  "layer" : {
+    "name": "VK_LAYER_q_overlay",
+    "type": "GLOBAL",
+    "library_path": "./libq_overlay.so",
+    "api_version": "1.0.0",
+    "implementation_version": "1",
+    "description": "In-game overlay layer",
+    "functions": {
+      "vkGetInstanceProcAddr": "Q_GetInstanceProcAddr",
+      "vkGetDeviceProcAddr": "Q_GetDeviceProcAddr"
+    }
+  }
+}
