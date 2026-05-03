@@ -7,11 +7,6 @@ WIP vulkan layer act as in-game overlay.
 cmake -B build -G Ninja
 cmake --build build
 ```
-## meson
-```
-meson setup build
-meson compile -C build
-```
 
 # Using
 ```
