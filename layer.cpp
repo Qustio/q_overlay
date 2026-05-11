@@ -1,3 +1,5 @@
+#include "layer.h"
+
 #include <cstdint>
 #include <cstring>
 #include <map>
@@ -30,13 +32,17 @@ void *GetKey(DispatchableType inst)
 	return *(void **)inst;
 }
 
+int aboba(int a) {
+	return a*a;
+}
+
 // layer book-keeping information, to store dispatch tables by key
 std::map<void *, VkuInstanceDispatchTable> instance_dispatch;
 std::map<void *, VkuDeviceDispatchTable> device_dispatch;
 
 // logger
 std::shared_ptr<spdlog::logger> global_logger = [](){
-	auto file_sink   = std::make_shared<spdlog::sinks::basic_file_sink_mt>("/tmp/q_overlay.log", true);
+	auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("/tmp/q_overlay.log", true);
     auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
 
 	file_sink->set_level(spdlog::level::trace);
@@ -45,6 +51,7 @@ std::shared_ptr<spdlog::logger> global_logger = [](){
 	auto logger = std::make_shared<spdlog::logger>("q_overlay", spdlog::sinks_init_list{file_sink, stdout_sink});
 	logger->set_level(spdlog::level::trace);
 	logger->flush_on(spdlog::level::debug);
+	std::vector<int> vvv{};
 
 	return logger;
 }();
