@@ -42,7 +42,7 @@ std::map<void *, VkuDeviceDispatchTable> device_dispatch;
 
 // logger
 std::shared_ptr<spdlog::logger> global_logger = [](){
-	auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("/tmp/q_overlay.log", true);
+	auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("q_overlay.log", true);
     auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
 
 	file_sink->set_level(spdlog::level::trace);
