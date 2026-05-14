@@ -48,10 +48,17 @@ target_include_directories(q_overlay PRIVATE
 target_compile_definitions(q_overlay PRIVATE
 	IMGUI_IMPL_VULKAN_NO_PROTOTYPES
 )
-add_custom_command(TARGET q_overlay POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_CURRENT_SOURCE_DIR}/VkLayer_q_overlay.json
-        ${CMAKE_CURRENT_BINARY_DIR}/VkLayer_q_overlay.json
+
+if (WIN32)
+	set(LAYER_LIBRARY_PATH ".\\\\q_overlay.dll")
+else()
+	set(LAYER_LIBRARY_PATH "./libq_overlay.so")
+endif()
+
+configure_file(
+	${CMAKE_CURRENT_SOURCE_DIR}/VkLayer_q_overlay.json.in
+	${CMAKE_CURRENT_BINARY_DIR}/VkLayer_q_overlay.json
+	@ONLY
 )
 
 if(ENABLE_COVERAGE)

@@ -232,7 +232,7 @@ VkResult VKAPI_CALL Q_QueuePresentKHR(
 }
 
 extern "C" {
-	VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL Q_GetDeviceProcAddr(VkDevice device, const char *pName) {
+	EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL Q_GetDeviceProcAddr(VkDevice device, const char *pName) {
 		if (strcmp(pName, "vkGetDeviceProcAddr") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(Q_GetDeviceProcAddr);
 		if (strcmp(pName, "vkCreateDevice") == 0)
@@ -249,7 +249,7 @@ extern "C" {
 		}
 	}
 
-	VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL Q_GetInstanceProcAddr(VkInstance instance, const char *pName) {
+	EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL Q_GetInstanceProcAddr(VkInstance instance, const char *pName) {
 		if (strcmp(pName, "vkGetInstanceProcAddr") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(Q_GetInstanceProcAddr);
 		if (strcmp(pName, "vkCreateInstance") == 0)
@@ -270,7 +270,7 @@ extern "C" {
 		}
 	}
 
-	VKAPI_ATTR VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface *pVersionStruct) {
+	EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface *pVersionStruct) {
 		if (pVersionStruct->loaderLayerInterfaceVersion < 2)
 			return VK_ERROR_INITIALIZATION_FAILED;
 

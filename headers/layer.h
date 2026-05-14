@@ -1,6 +1,17 @@
 #ifndef LAYER
 #define LAYER
 
-int aboba(int);
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
+#undef EXPORT
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT
+#endif
+
+EXPORT int aboba(int);
 
 #endif // LAYER
