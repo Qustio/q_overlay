@@ -4,13 +4,6 @@ project(q_overlay VERSION 0.1 LANGUAGES CXX)
 
 option(ENABLE_COVERAGE "Enable code coverage reporting" ON)
 
-if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-
-endif()
-add_compile_options(-O0 -g -fprofile-instr-generate -fcoverage-mapping)
-add_link_options(-fprofile-instr-generate -fcoverage-mapping)
-
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -20,7 +13,7 @@ set(IMGUI_DIR third_party/imgui)
 find_package(GTest REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(Vulkan REQUIRED)
-find_package(VulkanUtilityLibraries REQUIRED)
+find_package(VulkanUtilityLibraries QUIET)
 
 include(GoogleTest)
 
@@ -41,9 +34,13 @@ target_include_directories(
 target_link_libraries(q_overlay PRIVATE
 	spdlog::spdlog
 	Vulkan::Headers
-	Vulkan::UtilityHeaders
-	Vulkan::LayerSettings
 )
+if (VulkanUtilityLibraries_FOUND)
+	target_link_libraries(q_overlay PRIVATE
+		Vulkan::UtilityHeaders
+		Vulkan::LayerSettings
+	)
+endif()
 target_include_directories(q_overlay PRIVATE
 	${IMGUI_DIR}
 	${IMGUI_DIR}/backends
@@ -56,6 +53,11 @@ add_custom_command(TARGET q_overlay POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/VkLayer_q_overlay.json
         ${CMAKE_CURRENT_BINARY_DIR}/VkLayer_q_overlay.json
 )
+
+if(ENABLE_COVERAGE)
+	target_compile_options(q_overlay PUBLIC -fprofile-instr-generate -fcoverage-mapping)
+	target_link_options(q_overlay PUBLIC -fprofile-instr-generate -fcoverage-mapping)
+endif()
 
 install(TARGETS q_overlay DESTINATION lib)
 install(FILES VkLayer_q_overlay.json DESTINATION share/vulkan/implicit_layer.d)
