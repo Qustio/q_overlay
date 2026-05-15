@@ -4,7 +4,7 @@
 #include <cstring>
 #include <map>
 #include <memory>
-#include <mutex>
+#include <shared_mutex>
 #include <chrono>
 #include <ratio>
 #include <spdlog/common.h>
@@ -19,9 +19,7 @@
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
 
-using scoped_lock = std::unique_lock<std::mutex>;
-
-static std::mutex global_lock;
+static std::shared_mutex global_lock;
 static auto last_frame = std::chrono::high_resolution_clock::now();
 static uint32_t vulkan_api_version;
 
@@ -29,7 +27,7 @@ static uint32_t vulkan_api_version;
 template<typename DispatchableType>
 void *GetKey(DispatchableType inst)
 {
-	return *(void **)inst;
+	return *reinterpret_cast<void**>(inst);
 }
 
 int aboba(int a) {
@@ -65,7 +63,7 @@ static void init_logger() {
 static void init_imgui_vulkan(VkDevice pDevice, uint32_t api_version) {
 	ImGui_ImplVulkan_LoadFunctions(api_version, [](const char* name, void* user_data) {
 		auto device = reinterpret_cast<VkDevice>(user_data);
-		scoped_lock l(global_lock);
+		std::shared_lock l(global_lock);
 		return device_dispatch[GetKey(device)].GetDeviceProcAddr(device, name);
 	}, (void *)pDevice);
 }
@@ -107,7 +105,7 @@ static VkResult VKAPI_CALL Q_CreateInstance(
 	//dispatchTable.EnumerateDeviceExtensionProperties = (PFN_vkEnumerateDeviceExtensionProperties)gipa(*pInstance, "vkEnumerateDeviceExtensionProperties");
 
 	{
-		scoped_lock l(global_lock);
+		std::unique_lock l(global_lock);
 		instance_dispatch[GetKey(*pInstance)] = dispatchTable;
 	}
 
@@ -162,7 +160,7 @@ static VkResult VKAPI_CALL Q_CreateDevice(
 
 	// store the table by key
 	{
-		scoped_lock l(global_lock);
+		std::unique_lock l(global_lock);
 		device_dispatch[GetKey(*pDevice)] = dispatchTable;
 	}
 
@@ -182,7 +180,7 @@ static VkResult VKAPI_CALL Q_CreateDevice(
 
 static void VKAPI_CALL Q_DestroyDevice(VkDevice device, const VkAllocationCallbacks* pAllocator)
 {
-	scoped_lock l(global_lock);
+	std::unique_lock l(global_lock);
 	auto DestroyDevice = device_dispatch[GetKey(device)].DestroyDevice;
 	device_dispatch.erase(GetKey(device));
 	l.unlock();
@@ -196,7 +194,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL Q_QueueSubmit(
     VkFence             fence)
 {
 	spdlog::trace("Q_QueueSubmit");
-	scoped_lock l(global_lock);
+	std::shared_lock l(global_lock);
 	auto QueueSubmit = device_dispatch[GetKey(queue)].QueueSubmit;
 	l.unlock();
 	return QueueSubmit(queue, submitCount, pSubmits, fence);
@@ -225,7 +223,7 @@ VkResult VKAPI_CALL Q_QueuePresentKHR(
 	}
 
 	spdlog::trace("Q_QueuePresentKHR");
-	scoped_lock l(global_lock);
+	std::shared_lock l(global_lock);
 	auto QueuePresent = device_dispatch[GetKey(queue)].QueuePresentKHR;
 	l.unlock();
 	return QueuePresent(queue, pPresentInfo);
@@ -234,38 +232,38 @@ VkResult VKAPI_CALL Q_QueuePresentKHR(
 extern "C" {
 	EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL Q_GetDeviceProcAddr(VkDevice device, const char *pName) {
 		if (strcmp(pName, "vkGetDeviceProcAddr") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(Q_GetDeviceProcAddr);
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceProcAddr);
 		if (strcmp(pName, "vkCreateDevice") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(Q_CreateDevice);
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateDevice);
 		if (strcmp(pName, "vkDestroyDevice")  == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(Q_DestroyDevice);
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroyDevice);
 		if (strcmp(pName, "vkQueueSubmit") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(Q_QueueSubmit);
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueueSubmit);
 		if (strcmp(pName, "vkQueuePresentKHR") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(Q_QueuePresentKHR);
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueuePresentKHR);
 		{
-			scoped_lock l(global_lock);
+			std::shared_lock l(global_lock);
 			return device_dispatch[GetKey(device)].GetDeviceProcAddr(device, pName);
 		}
 	}
 
 	EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL Q_GetInstanceProcAddr(VkInstance instance, const char *pName) {
 		if (strcmp(pName, "vkGetInstanceProcAddr") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(Q_GetInstanceProcAddr);
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetInstanceProcAddr);
 		if (strcmp(pName, "vkCreateInstance") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(Q_CreateInstance);
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateInstance);
 		if (strcmp(pName, "vkGetDeviceProcAddr") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(Q_GetDeviceProcAddr);
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceProcAddr);
 		if (strcmp(pName, "vkCreateDevice") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(Q_CreateDevice);
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateDevice);
 		if (strcmp(pName, "vkDestroyDevice") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(Q_DestroyDevice);
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroyDevice);
 		if (strcmp(pName, "vkQueueSubmit") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(Q_QueueSubmit);
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueueSubmit);
 		if (strcmp(pName, "vkQueuePresentKHR") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(Q_QueuePresentKHR);
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueuePresentKHR);
 		{
-			scoped_lock l(global_lock);
+			std::shared_lock l(global_lock);
 			return instance_dispatch[GetKey(instance)].GetInstanceProcAddr(instance, pName);
 		}
 	}
