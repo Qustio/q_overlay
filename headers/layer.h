@@ -2,14 +2,14 @@
 #define LAYER
 
 #ifdef _WIN32
-#include <Windows.h>
+	#include <Windows.h>
 #endif
 
 #undef EXPORT
 #ifdef _WIN32
-#define EXPORT __declspec(dllexport)
+	#define EXPORT __declspec(dllexport)
 #else
-#define EXPORT
+	#define EXPORT
 #endif
 
 EXPORT int aboba(int);
