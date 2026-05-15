@@ -1,4 +1,4 @@
-#include "layer.h"
+import global_state;
 
 #include <chrono>
 #include <cstdint>
@@ -6,68 +6,35 @@
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
 #include <map>
-#include <memory>
 #include <ratio>
 #include <shared_mutex>
-#include <spdlog/common.h>
-#include <spdlog/logger.h>
-#include <spdlog/sinks/basic_file_sink.h>
-#include <spdlog/sinks/stdout_color_sinks.h>
-#include <spdlog/spdlog.h>
+#include <spdlog/fmt/fmt.h>
 #include <vulkan/utility/vk_dispatch_table.h>
 #include <vulkan/vk_layer.h>
 #include <vulkan/vulkan.h>
+#include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_core.h>
 
-static std::shared_mutex global_lock;
-static auto last_frame = std::chrono::high_resolution_clock::now();
-static uint32_t vulkan_api_version;
+#ifdef _WIN32
+	#include <Windows.h>
+#endif
 
-// use the loader's dispatch table pointer as a key for dispatch map lookups
-template <typename DispatchableType>
-void *GetKey(DispatchableType inst) {
-	return *reinterpret_cast<void **>(inst);
-}
+#undef EXPORT
+#ifdef _WIN32
+	#define EXPORT __declspec(dllexport)
+#else
+	#define EXPORT
+#endif
 
-int aboba(int a) { return a * a; }
-
-// layer book-keeping information, to store dispatch tables by key
-std::map<void *, VkuInstanceDispatchTable> instance_dispatch;
-std::map<void *, VkuDeviceDispatchTable> device_dispatch;
-
-// logger
-std::shared_ptr<spdlog::logger> global_logger = []() {
-	auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-		"q_overlay.log", true
-	);
-	auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-
-	file_sink->set_level(spdlog::level::trace);
-	stdout_sink->set_level(spdlog::level::debug);
-
-	auto logger = std::make_shared<spdlog::logger>(
-		"q_overlay", spdlog::sinks_init_list{file_sink, stdout_sink}
-	);
-	logger->set_level(spdlog::level::trace);
-	logger->flush_on(spdlog::level::debug);
-	std::vector<int> vvv{};
-
-	return logger;
-}();
-
-static void init_logger() {
-	spdlog::set_default_logger(global_logger);
-	spdlog::set_level(spdlog::level::trace);
-	spdlog::flush_on(spdlog::level::trace);
-}
+static globals g;
 
 static void init_imgui_vulkan(VkDevice pDevice, uint32_t api_version) {
 	ImGui_ImplVulkan_LoadFunctions(
 		api_version,
 		[](const char *name, void *user_data) {
 		auto device = reinterpret_cast<VkDevice>(user_data);
-		std::shared_lock l(global_lock);
-		return device_dispatch[GetKey(device)].GetDeviceProcAddr(
+		std::shared_lock l(g.global_lock);
+		return g.device_dispatch[GetKey(device)].GetDeviceProcAddr(
 			device, name
 		);
 	},
@@ -80,7 +47,7 @@ static VkResult VKAPI_CALL Q_CreateInstance(
 	const VkAllocationCallbacks *pAllocator,
 	VkInstance *pInstance
 ) {
-	spdlog::trace("Q_CreateInstance called");
+	g.l.trace("Q_CreateInstance called");
 	VkLayerInstanceCreateInfo *layerCreateInfo =
 		reinterpret_cast<VkLayerInstanceCreateInfo *>(
 			const_cast<void *>(pCreateInfo->pNext)
@@ -121,12 +88,12 @@ static VkResult VKAPI_CALL Q_CreateInstance(
 	// "vkEnumerateDeviceExtensionProperties");
 
 	{
-		std::unique_lock l(global_lock);
-		instance_dispatch[GetKey(*pInstance)] = dispatchTable;
+		std::unique_lock l(g.global_lock);
+		g.instance_dispatch[GetKey(*pInstance)] = dispatchTable;
 	}
 
 	// fill api version
-	vulkan_api_version = pCreateInfo->pApplicationInfo->apiVersion;
+	g.vulkan_api_version = pCreateInfo->pApplicationInfo->apiVersion;
 
 	return VK_SUCCESS;
 }
@@ -137,7 +104,7 @@ static VkResult VKAPI_CALL Q_CreateDevice(
 	const VkAllocationCallbacks *pAllocator,
 	VkDevice *pDevice
 ) {
-	spdlog::trace("Q_CreateDevice called");
+	g.l.trace("Q_CreateDevice called");
 	VkLayerDeviceCreateInfo *layerCreateInfo =
 		reinterpret_cast<VkLayerDeviceCreateInfo *>(
 			const_cast<void *>(pCreateInfo->pNext)
@@ -181,6 +148,10 @@ static VkResult VKAPI_CALL Q_CreateDevice(
 		(PFN_vkQueueSubmit)gdpa(*pDevice, "vkQueueSubmit");
 	dispatchTable.QueuePresentKHR =
 		(PFN_vkQueuePresentKHR)gdpa(*pDevice, "vkQueuePresentKHR");
+	dispatchTable.CreateSwapchainKHR =
+		(PFN_vkCreateSwapchainKHR)gdpa(*pDevice, "vkCreateSwapchainKHR");
+	dispatchTable.DestroySwapchainKHR =
+		(PFN_vkDestroySwapchainKHR)gdpa(*pDevice, "vkDestroySwapchainKHR");
 	// dispatchTable.CmdDraw = (PFN_vkCmdDraw)gdpa(*pDevice, "vkCmdDraw");
 	// dispatchTable.CmdDrawIndexed = (PFN_vkCmdDrawIndexed)gdpa(*pDevice,
 	// "vkCmdDrawIndexed"); dispatchTable.EndCommandBuffer =
@@ -188,12 +159,12 @@ static VkResult VKAPI_CALL Q_CreateDevice(
 
 	// store the table by key
 	{
-		std::unique_lock l(global_lock);
-		device_dispatch[GetKey(*pDevice)] = dispatchTable;
+		std::unique_lock l(g.global_lock);
+		g.device_dispatch[GetKey(*pDevice)] = dispatchTable;
 	}
 
 	// init imgui vulkan function loader
-	init_imgui_vulkan(*pDevice, vulkan_api_version);
+	init_imgui_vulkan(*pDevice, g.vulkan_api_version);
 
 	// ImGui_ImplVulkan_InitInfo init_info = {};
 	// init_info.Instance       =
@@ -206,11 +177,66 @@ static VkResult VKAPI_CALL Q_CreateDevice(
 	return VK_SUCCESS;
 }
 
+static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateWin32Surface(
+	VkInstance instance,
+	const VkWin32SurfaceCreateInfoKHR *pCreateInfo,
+	const VkAllocationCallbacks *pAllocator,
+	VkSurfaceKHR *pSurface
+) {
+	g.l.trace("Q_CreateSwapchain");
+	std::shared_lock l(g.global_lock);
+	auto CreateWin32SurfaceKHR = g.device_dispatch[GetKey(instance)].CreateWin32SurfaceKHR;
+	l.unlock();
+	auto result = CreateWin32SurfaceKHR(instance, pCreateInfo, pAllocator, pSurface);
+	return result;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateSwapchain(
+	VkDevice device,
+	const VkSwapchainCreateInfoKHR *pCreateInfo,
+	const VkAllocationCallbacks *pAllocator,
+	VkSwapchainKHR *pSwapchain
+) {
+	g.l.trace("Q_CreateSwapchain");
+	std::shared_lock l(g.global_lock);
+	auto CreateSwapchain = g.device_dispatch[GetKey(device)].CreateSwapchainKHR;
+	l.unlock();
+	auto result = CreateSwapchain(device, pCreateInfo, pAllocator, pSwapchain);
+	auto h = pCreateInfo->imageExtent.height;
+	auto w = pCreateInfo->imageExtent.width;
+	if (result == VK_SUCCESS) {
+		std::unique_lock swl(g.sw_lock);
+		auto sw = vk::SwapchainKHR(*pSwapchain);
+		auto res = g.swapchains.find(sw);
+		if (res == g.swapchains.end()) {
+			g.count++;
+		}
+		g.swapchains.emplace(sw, SwapchainData{h, w});
+	}
+	return result;
+}
+
+static void VKAPI_CALL Q_DestroySwapchain(
+	VkDevice device,
+	VkSwapchainKHR swapchain,
+	const VkAllocationCallbacks *pAllocator
+) {
+	g.l.trace("Q_DestroySwapchain");
+	std::shared_lock l(g.global_lock);
+	auto DestroySwapchain = g.device_dispatch[GetKey(device)].DestroySwapchainKHR;
+	l.unlock();
+	DestroySwapchain(device, swapchain, pAllocator);
+	std::unique_lock swl(g.sw_lock);
+	auto sw = vk::SwapchainKHR(swapchain);
+	g.swapchains.erase(sw);
+	g.count--;
+}
+
 static void VKAPI_CALL
 Q_DestroyDevice(VkDevice device, const VkAllocationCallbacks *pAllocator) {
-	std::unique_lock l(global_lock);
-	auto DestroyDevice = device_dispatch[GetKey(device)].DestroyDevice;
-	device_dispatch.erase(GetKey(device));
+	std::unique_lock l(g.global_lock);
+	auto DestroyDevice = g.device_dispatch[GetKey(device)].DestroyDevice;
+	g.device_dispatch.erase(GetKey(device));
 	l.unlock();
 	DestroyDevice(device, pAllocator);
 }
@@ -221,9 +247,9 @@ static VKAPI_ATTR VkResult VKAPI_CALL Q_QueueSubmit(
 	const VkSubmitInfo *pSubmits,
 	VkFence fence
 ) {
-	spdlog::trace("Q_QueueSubmit");
-	std::shared_lock l(global_lock);
-	auto QueueSubmit = device_dispatch[GetKey(queue)].QueueSubmit;
+	g.l.trace("Q_QueueSubmit");
+	std::shared_lock l(g.global_lock);
+	auto QueueSubmit = g.device_dispatch[GetKey(queue)].QueueSubmit;
 	l.unlock();
 	return QueueSubmit(queue, submitCount, pSubmits, fence);
 }
@@ -231,21 +257,21 @@ static VKAPI_ATTR VkResult VKAPI_CALL Q_QueueSubmit(
 VkResult VKAPI_CALL
 Q_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo) {
 	auto now = std::chrono::high_resolution_clock::now();
-	auto elapsed = std::chrono::duration<double, std::milli>(now - last_frame);
+	auto elapsed = std::chrono::duration<double, std::milli>(now - g.last_frame);
 	auto d = elapsed.count();
-	last_frame = now;
-	spdlog::info(
+	g.last_frame = now;
+	g.l.info(
 		"frame time: {:.2f}ms ({:.1f} FPS)", elapsed.count(), 1000.0 / elapsed.count()
 	);
 	for (int i = 0; i < pPresentInfo->swapchainCount; i++) {
-		spdlog::info(
+		g.l.info(
 			"swapchain: [{}]: {}", i, (uint64_t)pPresentInfo->pSwapchains[i]
 		);
 	}
 
-	spdlog::trace("Q_QueuePresentKHR");
-	std::shared_lock l(global_lock);
-	auto QueuePresent = device_dispatch[GetKey(queue)].QueuePresentKHR;
+	g.l.trace("Q_QueuePresentKHR");
+	std::shared_lock l(g.global_lock);
+	auto QueuePresent = g.device_dispatch[GetKey(queue)].QueuePresentKHR;
 	l.unlock();
 	return QueuePresent(queue, pPresentInfo);
 }
@@ -263,9 +289,13 @@ extern "C" {
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueueSubmit);
 		if (strcmp(pName, "vkQueuePresentKHR") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueuePresentKHR);
+		if (strcmp(pName, "vkCreateSwapchainKHR") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateSwapchain);
+		if (strcmp(pName, "vkDestroySwapchainKHR") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroySwapchain);
 		{
-			std::shared_lock l(global_lock);
-			return device_dispatch[GetKey(device)].GetDeviceProcAddr(
+			std::shared_lock l(g.global_lock);
+			return g.device_dispatch[GetKey(device)].GetDeviceProcAddr(
 				device, pName
 			);
 		}
@@ -287,15 +317,18 @@ extern "C" {
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueueSubmit);
 		if (strcmp(pName, "vkQueuePresentKHR") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueuePresentKHR);
+		if (strcmp(pName, "vkDestroySwapchainKHR") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroySwapchain);
+
 		{
-			std::shared_lock l(global_lock);
-			return instance_dispatch[GetKey(instance)].GetInstanceProcAddr(
+			std::shared_lock l(g.global_lock);
+			return g.instance_dispatch[GetKey(instance)].GetInstanceProcAddr(
 				instance, pName
 			);
 		}
 	}
 
-	EXPORT VKAPI_ATTR VkResult VKAPI_CALL
+	VKAPI_ATTR VkResult VKAPI_CALL
 	vkNegotiateLoaderLayerInterfaceVersion(
 		VkNegotiateLayerInterface *pVersionStruct
 	) {
@@ -306,8 +339,6 @@ extern "C" {
 		pVersionStruct->pfnGetInstanceProcAddr = Q_GetInstanceProcAddr;
 		pVersionStruct->pfnGetDeviceProcAddr = Q_GetDeviceProcAddr;
 		pVersionStruct->pfnGetPhysicalDeviceProcAddr = nullptr;
-
-		init_logger();
 
 		return VK_SUCCESS;
 	}
