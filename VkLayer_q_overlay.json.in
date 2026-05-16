@@ -7,6 +7,12 @@
     "api_version": "1.0.0",
     "implementation_version": "1",
     "description": "In-game overlay layer",
+    "enable_environment": {
+      "Q": "1"
+    },
+    "disable_environment": {
+      "DISABLE_Q": "1"
+    },
     "functions": {
       "vkGetInstanceProcAddr": "Q_GetInstanceProcAddr",
       "vkGetDeviceProcAddr": "Q_GetDeviceProcAddr"

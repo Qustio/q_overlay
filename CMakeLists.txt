@@ -54,16 +54,17 @@ target_compile_definitions(q_overlay PRIVATE
 	IMGUI_IMPL_VULKAN_NO_PROTOTYPES
 )
 
+
+set(LAYER_LIBRARY_PATH ${CMAKE_INSTALL_PREFIX}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}q_overlay${CMAKE_SHARED_LIBRARY_SUFFIX})
+message(STATUS ${LAYER_LIBRARY_PATH})
+
 if (WIN32)
-	set(LAYER_LIBRARY_PATH ".\\\\q_overlay.dll")
 	target_compile_definitions(q_overlay PUBLIC
 		VK_USE_PLATFORM_WIN32_KHR
 		WIN32_LEAN_AND_MEAN
 		NOMINMAX
 		NOGDI
 	)
-else()
-	set(LAYER_LIBRARY_PATH "./libq_overlay.so")
 endif()
 
 configure_file(
@@ -78,6 +79,6 @@ if(ENABLE_COVERAGE)
 endif()
 
 install(TARGETS q_overlay DESTINATION lib)
-install(FILES VkLayer_q_overlay.json DESTINATION share/vulkan/implicit_layer.d)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/VkLayer_q_overlay.json DESTINATION ${CMAKE_INSTALL_PREFIX}/share/vulkan/implicit_layer.d)
 
 #add_subdirectory(test)

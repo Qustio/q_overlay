@@ -3,6 +3,7 @@ import global_state;
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
 #include <map>
@@ -177,6 +178,8 @@ static VkResult VKAPI_CALL Q_CreateDevice(
 	return VK_SUCCESS;
 }
 
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+
 static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateWin32Surface(
 	VkInstance instance,
 	const VkWin32SurfaceCreateInfoKHR *pCreateInfo,
@@ -191,13 +194,19 @@ static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateWin32Surface(
 	return result;
 }
 
+#endif
+
+#ifdef VK_USE_PLATFORM_WAYLAND_KHR
+#define LOL
+#endif
+
 static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateSwapchain(
 	VkDevice device,
 	const VkSwapchainCreateInfoKHR *pCreateInfo,
 	const VkAllocationCallbacks *pAllocator,
 	VkSwapchainKHR *pSwapchain
 ) {
-	g.l.trace("Q_CreateSwapchain");
+	g.l.debug("Q_CreateSwapchain");
 	std::shared_lock l(g.global_lock);
 	auto CreateSwapchain = g.device_dispatch[GetKey(device)].CreateSwapchainKHR;
 	l.unlock();
@@ -221,7 +230,7 @@ static void VKAPI_CALL Q_DestroySwapchain(
 	VkSwapchainKHR swapchain,
 	const VkAllocationCallbacks *pAllocator
 ) {
-	g.l.trace("Q_DestroySwapchain");
+	g.l.debug("Q_DestroySwapchain");
 	std::shared_lock l(g.global_lock);
 	auto DestroySwapchain = g.device_dispatch[GetKey(device)].DestroySwapchainKHR;
 	l.unlock();
@@ -231,6 +240,7 @@ static void VKAPI_CALL Q_DestroySwapchain(
 	g.swapchains.erase(sw);
 	g.count--;
 }
+
 
 static void VKAPI_CALL
 Q_DestroyDevice(VkDevice device, const VkAllocationCallbacks *pAllocator) {
@@ -260,14 +270,14 @@ Q_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo) {
 	auto elapsed = std::chrono::duration<double, std::milli>(now - g.last_frame);
 	auto d = elapsed.count();
 	g.last_frame = now;
-	g.l.info(
-		"frame time: {:.2f}ms ({:.1f} FPS)", elapsed.count(), 1000.0 / elapsed.count()
-	);
-	for (int i = 0; i < pPresentInfo->swapchainCount; i++) {
-		g.l.info(
-			"swapchain: [{}]: {}", i, (uint64_t)pPresentInfo->pSwapchains[i]
-		);
-	}
+	// g.l.info(
+	// 	"frame time: {:.2f}ms ({:.1f} FPS)", elapsed.count(), 1000.0 / elapsed.count()
+	// );
+	// for (int i = 0; i < pPresentInfo->swapchainCount; i++) {
+	// 	g.l.info(
+	// 		"swapchain: [{}]: {}", i, (uint64_t)pPresentInfo->pSwapchains[i]
+	// 	);
+	// }
 
 	g.l.trace("Q_QueuePresentKHR");
 	std::shared_lock l(g.global_lock);

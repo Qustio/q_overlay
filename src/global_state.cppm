@@ -34,15 +34,16 @@ export struct globals {
 	}
 	~globals() {
 		for (const auto &[s, size] : swapchains) {
-			spdlog::info(
+			l.info(
 				"Swapchain: {} w: {} h: {}",
 				reinterpret_cast<uint64_t>(static_cast<VkSwapchainKHR>(s)),
 				size.h,
 				size.w
 			);
 		}
-		spdlog::info(count.load());
-		spdlog::info("Exit");
+		l.info(count.load());
+		l.info("Exit");
+		l.flush();
 	}
 	spdlog::logger l;
 	std::atomic_size_t count{0};
@@ -51,7 +52,7 @@ export struct globals {
 	std::map<void *, VkuInstanceDispatchTable> instance_dispatch;
 	std::map<void *, VkuDeviceDispatchTable> device_dispatch;
 	std::shared_mutex global_lock;
-	std::chrono::time_point<std::chrono::steady_clock> last_frame = std::chrono::high_resolution_clock::now();
+	std::chrono::time_point<std::chrono::high_resolution_clock> last_frame = std::chrono::high_resolution_clock::now();
 	uint32_t vulkan_api_version;
 	auto init_logger() -> spdlog::logger {
 		auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
