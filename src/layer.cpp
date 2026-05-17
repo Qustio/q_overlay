@@ -91,8 +91,10 @@ static VkResult VKAPI_CALL Q_CreateInstance(
 		g.instance_dispatch[GetKey(*pInstance)] = dispatchTable;
 	}
 
-	g.init_info.Instance = *pInstance;
-	g.init_info.ApiVersion = pCreateInfo->pApplicationInfo->apiVersion;
+	g.update_imgui_init_info([&](auto info) {
+		info.Instance = *pInstance;
+		info.ApiVersion = pCreateInfo->pApplicationInfo->apiVersion;
+	});
 
 	return VK_SUCCESS;
 }
@@ -144,7 +146,7 @@ static VkResult VKAPI_CALL Q_CreateDevice(
 		&dispatchTable,
 		gdpa
 	);
-	
+
 	// store the table by key
 	{
 		std::unique_lock l(g.global_lock);

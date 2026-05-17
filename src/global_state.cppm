@@ -2,6 +2,8 @@ module;
 
 #include <chrono>
 #include <cstdint>
+#include <imgui.h>
+#include <imgui_impl_vulkan.h>
 #include <map>
 #include <memory>
 #include <shared_mutex>
@@ -16,8 +18,6 @@ module;
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_core.h>
-#include <imgui.h>
-#include <imgui_impl_vulkan.h>
 export module global_state;
 
 // use the loader's dispatch table pointer as a key for dispatch map lookups
@@ -36,6 +36,7 @@ export struct globals {
 	}
 
 	~globals() {
+		std::shared_lock lock(sw_lock);
 		for (const auto &[s, size] : swapchains) {
 			l.info(
 				"Swapchain: {} w: {} h: {}",
@@ -57,9 +58,11 @@ export struct globals {
 	std::map<void *, VkuDeviceDispatchTable> device_dispatch;
 	std::shared_mutex global_lock;
 	std::chrono::time_point<std::chrono::high_resolution_clock> last_frame = std::chrono::high_resolution_clock::now();
+
+	std::shared_mutex init_info_lock;
 	ImGui_ImplVulkan_InitInfo init_info = {};
 
-	auto init_logger() -> spdlog::logger {
+	static auto init_logger() -> spdlog::logger {
 		auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
 			"q_overlay.log", true
 		);
@@ -73,6 +76,12 @@ export struct globals {
 		logger.flush_on(spdlog::level::debug);
 
 		return logger;
+	}
+	template <typename F>
+	requires std::invocable<F, ImGui_ImplVulkan_InitInfo &> && std::is_void_v<std::invoke_result_t<F, ImGui_ImplVulkan_InitInfo &>>
+	auto update_imgui_init_info(F &&f) -> void {
+		std::unique_lock lock{init_info_lock};
+		std::forward<F>(f)(init_info);
 	}
 	auto init_imgui() -> void {
 		ImGui_ImplVulkan_Init(&init_info);
