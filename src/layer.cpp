@@ -3,10 +3,10 @@ import global_state;
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <mutex>
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
 #include <map>
+#include <mutex>
 #include <ratio>
 #include <shared_mutex>
 #include <spdlog/fmt/fmt.h>
@@ -79,24 +79,20 @@ static VkResult VKAPI_CALL Q_CreateInstance(
 	if (result != VK_SUCCESS)
 		return result;
 
-	VkuInstanceDispatchTable dispatchTable;
-	dispatchTable.GetInstanceProcAddr =
-		(PFN_vkGetInstanceProcAddr)gipa(*pInstance, "vkGetInstanceProcAddr");
-	dispatchTable.DestroyInstance =
-		(PFN_vkDestroyInstance)gipa(*pInstance, "vkDestroyInstance");
-	dispatchTable.CreateWaylandSurfaceKHR =
-		(PFN_vkCreateWaylandSurfaceKHR)gipa(*pInstance, "vkCreateWaylandSurfaceKHR");
-	// dispatchTable.EnumerateDeviceExtensionProperties =
-	// (PFN_vkEnumerateDeviceExtensionProperties)gipa(*pInstance,
-	// "vkEnumerateDeviceExtensionProperties");
+	VkuInstanceDispatchTable dispatchTable{};
+	vkuInitInstanceDispatchTable(
+		*pInstance,
+		&dispatchTable,
+		gipa
+	);
 
 	{
 		std::unique_lock l(g.global_lock);
 		g.instance_dispatch[GetKey(*pInstance)] = dispatchTable;
 	}
 
-	// fill api version
-	g.vulkan_api_version = pCreateInfo->pApplicationInfo->apiVersion;
+	g.init_info.Instance = *pInstance;
+	g.init_info.ApiVersion = pCreateInfo->pApplicationInfo->apiVersion;
 
 	return VK_SUCCESS;
 }
@@ -142,40 +138,18 @@ static VkResult VKAPI_CALL Q_CreateDevice(
 	if (result != VK_SUCCESS)
 		return result;
 
-	VkuDeviceDispatchTable dispatchTable;
-	dispatchTable.GetDeviceProcAddr =
-		(PFN_vkGetDeviceProcAddr)gdpa(*pDevice, "vkGetDeviceProcAddr");
-	dispatchTable.DestroyDevice =
-		(PFN_vkDestroyDevice)gdpa(*pDevice, "vkDestroyDevice");
-	dispatchTable.QueueSubmit =
-		(PFN_vkQueueSubmit)gdpa(*pDevice, "vkQueueSubmit");
-	dispatchTable.QueuePresentKHR =
-		(PFN_vkQueuePresentKHR)gdpa(*pDevice, "vkQueuePresentKHR");
-	dispatchTable.CreateSwapchainKHR =
-		(PFN_vkCreateSwapchainKHR)gdpa(*pDevice, "vkCreateSwapchainKHR");
-	dispatchTable.DestroySwapchainKHR =
-		(PFN_vkDestroySwapchainKHR)gdpa(*pDevice, "vkDestroySwapchainKHR");
-	// dispatchTable.CmdDraw = (PFN_vkCmdDraw)gdpa(*pDevice, "vkCmdDraw");
-	// dispatchTable.CmdDrawIndexed = (PFN_vkCmdDrawIndexed)gdpa(*pDevice,
-	// "vkCmdDrawIndexed"); dispatchTable.EndCommandBuffer =
-	// (PFN_vkEndCommandBuffer)gdpa(*pDevice, "vkEndCommandBuffer");
-
+	VkuDeviceDispatchTable dispatchTable{};
+	vkuInitDeviceDispatchTable(
+		*pDevice,
+		&dispatchTable,
+		gdpa
+	);
+	
 	// store the table by key
 	{
 		std::unique_lock l(g.global_lock);
 		g.device_dispatch[GetKey(*pDevice)] = dispatchTable;
 	}
-
-	// init imgui vulkan function loader
-	init_imgui_vulkan(*pDevice, g.vulkan_api_version);
-
-	// ImGui_ImplVulkan_InitInfo init_info = {};
-	// init_info.Instance       =
-	// init_info.PhysicalDevice = physicalDevice;
-	// init_info.Device         = *pDevice;
-	// init_info.Queue          =
-	// // ...
-	// ImGui_ImplVulkan_Init(&init_info);
 
 	return VK_SUCCESS;
 }
@@ -254,7 +228,6 @@ static void VKAPI_CALL Q_DestroySwapchain(
 	g.swapchains.erase(sw);
 	g.count--;
 }
-
 
 static void VKAPI_CALL
 Q_DestroyDevice(VkDevice device, const VkAllocationCallbacks *pAllocator) {

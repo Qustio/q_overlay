@@ -16,6 +16,8 @@ module;
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_core.h>
+#include <imgui.h>
+#include <imgui_impl_vulkan.h>
 export module global_state;
 
 // use the loader's dispatch table pointer as a key for dispatch map lookups
@@ -32,6 +34,7 @@ export struct SwapchainData {
 export struct globals {
 	globals() : l(init_logger()) {
 	}
+
 	~globals() {
 		for (const auto &[s, size] : swapchains) {
 			l.info(
@@ -45,6 +48,7 @@ export struct globals {
 		l.info("Exit");
 		l.flush();
 	}
+
 	spdlog::logger l;
 	std::atomic_size_t count{0};
 	std::shared_mutex sw_lock;
@@ -53,7 +57,8 @@ export struct globals {
 	std::map<void *, VkuDeviceDispatchTable> device_dispatch;
 	std::shared_mutex global_lock;
 	std::chrono::time_point<std::chrono::high_resolution_clock> last_frame = std::chrono::high_resolution_clock::now();
-	uint32_t vulkan_api_version;
+	ImGui_ImplVulkan_InitInfo init_info = {};
+
 	auto init_logger() -> spdlog::logger {
 		auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
 			"q_overlay.log", true
@@ -68,5 +73,8 @@ export struct globals {
 		logger.flush_on(spdlog::level::debug);
 
 		return logger;
+	}
+	auto init_imgui() -> void {
+		ImGui_ImplVulkan_Init(&init_info);
 	}
 };
