@@ -67,6 +67,12 @@ if (WIN32)
 	)
 endif()
 
+if (UNIX)
+	target_compile_definitions(q_overlay PUBLIC
+		VK_USE_PLATFORM_WAYLAND_KHR
+	)
+endif()
+
 configure_file(
 	${CMAKE_CURRENT_SOURCE_DIR}/VkLayer_q_overlay.json.in
 	${CMAKE_CURRENT_BINARY_DIR}/VkLayer_q_overlay.json

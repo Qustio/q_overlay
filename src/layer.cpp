@@ -84,6 +84,8 @@ static VkResult VKAPI_CALL Q_CreateInstance(
 		(PFN_vkGetInstanceProcAddr)gipa(*pInstance, "vkGetInstanceProcAddr");
 	dispatchTable.DestroyInstance =
 		(PFN_vkDestroyInstance)gipa(*pInstance, "vkDestroyInstance");
+	dispatchTable.CreateWaylandSurfaceKHR =
+		(PFN_vkCreateWaylandSurfaceKHR)gipa(*pInstance, "vkCreateWaylandSurfaceKHR");
 	// dispatchTable.EnumerateDeviceExtensionProperties =
 	// (PFN_vkEnumerateDeviceExtensionProperties)gipa(*pInstance,
 	// "vkEnumerateDeviceExtensionProperties");
@@ -197,7 +199,19 @@ static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateWin32Surface(
 #endif
 
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
-#define LOL
+static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateWaylandSurface(
+	VkInstance instance,
+	const VkWaylandSurfaceCreateInfoKHR *pCreateInfo,
+	const VkAllocationCallbacks *pAllocator,
+	VkSurfaceKHR *pSurface
+) {
+	g.l.debug("Q_CreateWaylandSurface");
+	std::shared_lock l(g.global_lock);
+	auto CreateWaylandSurfaceKHR = g.instance_dispatch[GetKey(instance)].CreateWaylandSurfaceKHR;
+	l.unlock();
+	auto result = CreateWaylandSurfaceKHR(instance, pCreateInfo, pAllocator, pSurface);
+	return result;
+}
 #endif
 
 static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateSwapchain(
@@ -329,7 +343,8 @@ extern "C" {
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueuePresentKHR);
 		if (strcmp(pName, "vkDestroySwapchainKHR") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroySwapchain);
-
+		if (strcmp(pName, "vkCreateWaylandSurfaceKHR") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWaylandSurface);
 		{
 			std::shared_lock l(g.global_lock);
 			return g.instance_dispatch[GetKey(instance)].GetInstanceProcAddr(
