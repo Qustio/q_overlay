@@ -37,10 +37,10 @@ export struct globals {
 
 	~globals() {
 		std::shared_lock lock(sw_lock);
-		for (const auto &[s, size] : swapchains) {
+		for (const auto &[swapchain, size] : swapchains) {
 			l.info(
 				"Swapchain: {} w: {} h: {}",
-				reinterpret_cast<uint64_t>(static_cast<VkSwapchainKHR>(s)),
+				reinterpret_cast<uint64_t>(static_cast<VkSwapchainKHR>(swapchain)),
 				size.h,
 				size.w
 			);
@@ -79,9 +79,9 @@ export struct globals {
 	}
 	template <typename F>
 	requires std::invocable<F, ImGui_ImplVulkan_InitInfo &> && std::is_void_v<std::invoke_result_t<F, ImGui_ImplVulkan_InitInfo &>>
-	auto update_imgui_init_info(F &&f) -> void {
+	auto update_imgui_init_info(F &&func) -> void {
 		std::unique_lock lock{init_info_lock};
-		std::forward<F>(f)(init_info);
+		std::forward<F>(func)(init_info);
 	}
 	auto init_imgui() -> void {
 		ImGui_ImplVulkan_Init(&init_info);

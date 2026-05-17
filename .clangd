@@ -1,2 +1,18 @@
 CompileFlags:
-    CompilationDatabase: .build
+  # CompilationDatabase: .build
+  Add:
+    - -Wall
+    - -Wextra
+    - -Wpedantic
+    - -Wthread-safety
+    - -Wthread-safety-negative
+Diagnostics:
+  ClangTidy:
+    Add:
+      - modernize-*
+      - performance-*
+      - bugprone-*
+      - readability-*
+      - concurrency-*
+      - portability-*
+      - misc-*
