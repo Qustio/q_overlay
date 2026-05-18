@@ -2,8 +2,6 @@ module;
 
 #include <chrono>
 #include <cstdint>
-#include <imgui.h>
-#include <imgui_impl_vulkan.h>
 #include <map>
 #include <memory>
 #include <shared_mutex>
@@ -18,6 +16,9 @@ module;
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_core.h>
+#include <imgui.h>
+#include <imgui_impl_vulkan.h>
+
 export module global_state;
 
 // use the loader's dispatch table pointer as a key for dispatch map lookups

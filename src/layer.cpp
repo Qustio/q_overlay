@@ -1,10 +1,6 @@
-import global_state;
-
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <imgui.h>
-#include <imgui_impl_vulkan.h>
 #include <map>
 #include <mutex>
 #include <ratio>
@@ -16,9 +12,8 @@ import global_state;
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_core.h>
 
-#ifdef _WIN32
-	#include <Windows.h>
-#endif
+
+import global_state;
 
 #undef EXPORT
 #ifdef _WIN32
@@ -29,19 +24,19 @@ import global_state;
 
 static globals g;
 
-static void init_imgui_vulkan(VkDevice pDevice, uint32_t api_version) {
-	ImGui_ImplVulkan_LoadFunctions(
-		api_version,
-		[](const char *name, void *user_data) {
-		auto device = reinterpret_cast<VkDevice>(user_data);
-		std::shared_lock l(g.global_lock);
-		return g.device_dispatch[GetKey(device)].GetDeviceProcAddr(
-			device, name
-		);
-	},
-		(void *)pDevice
-	);
-}
+// static void init_imgui_vulkan(VkDevice pDevice, uint32_t api_version) {
+// 	ImGui_ImplVulkan_LoadFunctions(
+// 		api_version,
+// 		[](const char *name, void *user_data) {
+// 		auto device = reinterpret_cast<VkDevice>(user_data);
+// 		std::shared_lock l(g.global_lock);
+// 		return g.device_dispatch[GetKey(device)].GetDeviceProcAddr(
+// 			device, name
+// 		);
+// 	},
+// 		(void *)pDevice
+// 	);
+// }
 
 static VkResult VKAPI_CALL Q_CreateInstance(
 	const VkInstanceCreateInfo *pCreateInfo,
@@ -166,7 +161,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateWin32Surface(
 ) {
 	g.l.trace("Q_CreateSwapchain");
 	std::shared_lock l(g.global_lock);
-	auto CreateWin32SurfaceKHR = g.device_dispatch[GetKey(instance)].CreateWin32SurfaceKHR;
+	auto CreateWin32SurfaceKHR = g.instance_dispatch[GetKey(instance)].CreateWin32SurfaceKHR;
 	l.unlock();
 	auto result = CreateWin32SurfaceKHR(instance, pCreateInfo, pAllocator, pSurface);
 	return result;
@@ -318,8 +313,14 @@ extern "C" {
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueuePresentKHR);
 		if (strcmp(pName, "vkDestroySwapchainKHR") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroySwapchain);
+#ifdef VK_USE_PLATFORM_WAYLAND_KHR
 		if (strcmp(pName, "vkCreateWaylandSurfaceKHR") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWaylandSurface);
+#endif
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+		if (strcmp(pName, "vkCreateWin32SurfaceKHR") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWin32Surface);
+#endif
 		{
 			std::shared_lock l(g.global_lock);
 			return g.instance_dispatch[GetKey(instance)].GetInstanceProcAddr(
