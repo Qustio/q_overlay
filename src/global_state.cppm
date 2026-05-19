@@ -189,10 +189,43 @@ export struct globals {
 	template <typename F>
 	requires std::invocable<F, ImGui_ImplVulkan_InitInfo &> && std::is_void_v<std::invoke_result_t<F, ImGui_ImplVulkan_InitInfo &>>
 	auto update_imgui_init_info(F &&func) -> void {
-		std::unique_lock lock{init_info_lock};
-		std::forward<F>(func)(init_info);
+		{
+			std::unique_lock lock{init_info_lock};
+			std::forward<F>(func)(init_info);
+		}
+		init_imgui();
 	}
 	auto init_imgui() -> void {
+		if (imgui_rendered.load()) return;
+		{
+			std::shared_lock lock{init_info_lock};
+			bool ready = true;
+			if (init_info.Instance == VK_NULL_HANDLE) {
+				l.warn("init_imgui: Instance null");
+				ready = false;
+			}
+			if (init_info.PhysicalDevice == VK_NULL_HANDLE) {
+				l.warn("init_imgui: PhysicalDevice null");
+				ready = false;
+			}
+			if (init_info.Device == VK_NULL_HANDLE) {
+				l.warn("init_imgui: Device null");
+				ready = false;
+			}
+			if (init_info.Queue == VK_NULL_HANDLE) {
+				l.warn("init_imgui: Queue null");
+				ready = false;
+			}
+			if (init_info.ImageCount == 0) {
+				l.warn("init_imgui: ImageCount 0");
+				ready = false;
+			}
+			if (init_info.PipelineInfoMain.RenderPass == VK_NULL_HANDLE) {
+				l.warn("init_imgui: RenderPass null");
+				ready = false;
+			}
+			if (!ready) return;
+		}
 		if (!imgui_rendered.exchange(true)) {
 			l.info("Calling ImGui_ImplVulkan_Init RenderPass: {:x}", (uint64_t)(VkRenderPass)init_info.PipelineInfoMain.RenderPass);
 			l.info("Calling ImGui_ImplVulkan_Init...");

@@ -303,7 +303,6 @@ static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateSwapchain(
 		g.l.info("MinImageCount: {}", pCreateInfo->minImageCount);
 		g.l.info("ImageCount: {}", image_count);
 	});
-	g.init_imgui();
 	std::unique_lock swl(g.sw_lock);
 	auto sw = vk::SwapchainKHR(*pSwapchain);
 	auto res = g.swapchains.find(sw);
