@@ -1,0 +1,4 @@
+#pragma once
+
+#define IMGUI_DISABLE_VULKAN_DYNAMIC_RENDERING
+

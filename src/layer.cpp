@@ -26,23 +26,44 @@ import global_state;
 static globals g;
 
 // https://github.com/ocornut/imgui/issues/4854#issuecomment-1783950012
-static void init_imgui_vulkan(VkDevice pDevice, uint32_t api_version) {
+static void init_imgui_vulkan(VkInstance instance, VkDevice device, uint32_t api_version) {
+	g.l.info("Vulkan API version: {}.{}.{}", VK_API_VERSION_MAJOR(api_version), VK_API_VERSION_MINOR(api_version), VK_API_VERSION_PATCH(api_version));
+	struct LoaderData {
+		VkInstance instance;
+		VkDevice device;
+	};
+	static LoaderData loader_data{
+		.instance = instance,
+		.device = device
+	};
 	auto res = ImGui_ImplVulkan_LoadFunctions(
 		api_version,
 		[](const char *name, void *user_data) -> PFN_vkVoidFunction {
-		auto *device = reinterpret_cast<VkDevice>(user_data);
+		auto *ld = reinterpret_cast<LoaderData *>(user_data);
 		std::shared_lock l(g.global_lock);
-		PFN_vkVoidFunction device_addr = g.device_dispatch[GetKey(device)].GetDeviceProcAddr(
-			device, name
+		g.l.trace(name);
+		if (name == "vkCmdBeginRendering" || name == "vkCmdEndRendering" || name == "vkCmdBeginRenderingKHR" || name == "vkCmdEndRenderingKHR") {
+			return nullptr;
+		}
+		PFN_vkVoidFunction device_addr = g.device_dispatch[GetKey(ld->device)].GetDeviceProcAddr(
+			ld->device, name
 		);
 		if (device_addr) {
+			g.l.trace("device");
 			return device_addr;
 		}
-		return g.instance_dispatch[GetKey(g.instance)].GetInstanceProcAddr(
-			g.instance, name
+		PFN_vkVoidFunction instance_addr = g.instance_dispatch[GetKey(ld->instance)].GetInstanceProcAddr(
+			ld->instance, name
 		);
+		if (instance_addr) {
+			g.l.trace("instance");
+			return instance_addr;
+		}
+		g.l.trace("what");
+		g.l.flush();
+		return nullptr;
 	},
-		(void *)pDevice
+		&loader_data
 	);
 	g.l.info("ImGui_ImplVulkan_LoadFunctions result: {}", res);
 }
@@ -160,13 +181,16 @@ static VkResult VKAPI_CALL Q_CreateDevice(
 		g.device_dispatch[GetKey(*pDevice)] = dispatchTable;
 	}
 
+	uint32_t api;
 	g.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-		init_imgui_vulkan(*pDevice, info.ApiVersion);
+		api = info.ApiVersion;
 		info.PhysicalDevice = physicalDevice;
 		info.Device = *pDevice;
 		g.l.info("PhysicalDevice");
 		g.l.info("Device");
 	});
+	init_imgui_vulkan(g.instance, *pDevice, api);
+
 	g.create_descriptor_pool(*pDevice);
 
 	return VK_SUCCESS;
@@ -218,6 +242,8 @@ static void VKAPI_CALL Q_GetDeviceQueue(
 	l.unlock();
 	GetDeviceQueue(device, queueFamilyIndex, queueIndex, pQueue);
 	g.l.debug("Family: {} Queue: {}", queueFamilyIndex, queueIndex);
+	if (queueFamilyIndex != 0 || queueFamilyIndex != 0)
+		return;
 	g.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
 		info.QueueFamily = queueFamilyIndex;
 		info.Queue = *pQueue;
@@ -420,7 +446,6 @@ extern "C" {
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateRenderPass);
 		if (strcmp(pName, "vkCmdEndRenderPass") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass);
-
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
 		if (strcmp(pName, "vkCreateWaylandSurfaceKHR") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWaylandSurface);
