@@ -51,7 +51,8 @@ target_include_directories(q_overlay PRIVATE
 	${IMGUI_DIR}/backends
 )
 target_compile_definitions(q_overlay PRIVATE
-	IMGUI_IMPL_VULKAN_NO_PROTOTYPES
+	VK_NO_PROTOTYPES
+	IMGUI_IMPL_VULKAN_USE_LOADER
 )
 
 

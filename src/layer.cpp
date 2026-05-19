@@ -1,6 +1,8 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <imgui.h>
+#include <imgui_impl_vulkan.h>
 #include <map>
 #include <mutex>
 #include <ratio>
@@ -11,7 +13,6 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_core.h>
-
 
 import global_state;
 
@@ -24,19 +25,27 @@ import global_state;
 
 static globals g;
 
-// static void init_imgui_vulkan(VkDevice pDevice, uint32_t api_version) {
-// 	ImGui_ImplVulkan_LoadFunctions(
-// 		api_version,
-// 		[](const char *name, void *user_data) {
-// 		auto device = reinterpret_cast<VkDevice>(user_data);
-// 		std::shared_lock l(g.global_lock);
-// 		return g.device_dispatch[GetKey(device)].GetDeviceProcAddr(
-// 			device, name
-// 		);
-// 	},
-// 		(void *)pDevice
-// 	);
-// }
+// https://github.com/ocornut/imgui/issues/4854#issuecomment-1783950012
+static void init_imgui_vulkan(VkDevice pDevice, uint32_t api_version) {
+	auto res = ImGui_ImplVulkan_LoadFunctions(
+		api_version,
+		[](const char *name, void *user_data) -> PFN_vkVoidFunction {
+		auto *device = reinterpret_cast<VkDevice>(user_data);
+		std::shared_lock l(g.global_lock);
+		PFN_vkVoidFunction device_addr = g.device_dispatch[GetKey(device)].GetDeviceProcAddr(
+			device, name
+		);
+		if (device_addr) {
+			return device_addr;
+		}
+		return g.instance_dispatch[GetKey(g.instance)].GetInstanceProcAddr(
+			g.instance, name
+		);
+	},
+		(void *)pDevice
+	);
+	g.l.info("ImGui_ImplVulkan_LoadFunctions result: {}", res);
+}
 
 static VkResult VKAPI_CALL Q_CreateInstance(
 	const VkInstanceCreateInfo *pCreateInfo,
@@ -44,6 +53,7 @@ static VkResult VKAPI_CALL Q_CreateInstance(
 	VkInstance *pInstance
 ) {
 	g.l.trace("Q_CreateInstance called");
+	g.l.flush();
 	VkLayerInstanceCreateInfo *layerCreateInfo =
 		reinterpret_cast<VkLayerInstanceCreateInfo *>(
 			const_cast<void *>(pCreateInfo->pNext)
@@ -84,9 +94,11 @@ static VkResult VKAPI_CALL Q_CreateInstance(
 	{
 		std::unique_lock l(g.global_lock);
 		g.instance_dispatch[GetKey(*pInstance)] = dispatchTable;
+		g.instance = *pInstance;
 	}
 
-	g.update_imgui_init_info([&](auto info) {
+	// init_imgui_vulkan(*pInstance, pCreateInfo->pApplicationInfo->apiVersion);
+	g.update_imgui_init_info([&](auto &info) -> void {
 		info.Instance = *pInstance;
 		info.ApiVersion = pCreateInfo->pApplicationInfo->apiVersion;
 	});
@@ -148,6 +160,15 @@ static VkResult VKAPI_CALL Q_CreateDevice(
 		g.device_dispatch[GetKey(*pDevice)] = dispatchTable;
 	}
 
+	g.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+		init_imgui_vulkan(*pDevice, info.ApiVersion);
+		info.PhysicalDevice = physicalDevice;
+		info.Device = *pDevice;
+		g.l.info("PhysicalDevice");
+		g.l.info("Device");
+	});
+	g.create_descriptor_pool(*pDevice);
+
 	return VK_SUCCESS;
 }
 
@@ -159,7 +180,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateWin32Surface(
 	const VkAllocationCallbacks *pAllocator,
 	VkSurfaceKHR *pSurface
 ) {
-	g.l.trace("Q_CreateSwapchain");
+	g.l.trace("Q_CreateWin32Surface");
 	std::shared_lock l(g.global_lock);
 	auto CreateWin32SurfaceKHR = g.instance_dispatch[GetKey(instance)].CreateWin32SurfaceKHR;
 	l.unlock();
@@ -185,6 +206,46 @@ static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateWaylandSurface(
 }
 #endif
 
+static void VKAPI_CALL Q_GetDeviceQueue(
+	VkDevice device,
+	uint32_t queueFamilyIndex,
+	uint32_t queueIndex,
+	VkQueue *pQueue
+) {
+	g.l.debug("Q_GetDeviceQueue");
+	std::shared_lock l(g.global_lock);
+	auto GetDeviceQueue = g.device_dispatch[GetKey(device)].GetDeviceQueue;
+	l.unlock();
+	GetDeviceQueue(device, queueFamilyIndex, queueIndex, pQueue);
+	g.l.debug("Family: {} Queue: {}", queueFamilyIndex, queueIndex);
+	g.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+		info.QueueFamily = queueFamilyIndex;
+		info.Queue = *pQueue;
+		g.l.info("Queue");
+		g.l.info("QueueFamily");
+	});
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateRenderPass(
+	VkDevice device,
+	const VkRenderPassCreateInfo *pCreateInfo,
+	const VkAllocationCallbacks *pAllocator,
+	VkRenderPass *pRenderPass
+) {
+	g.l.debug("Q_CreateRenderPass");
+	std::shared_lock l(g.global_lock);
+	auto &dt = g.device_dispatch[GetKey(device)];
+	l.unlock();
+	auto result = dt.CreateRenderPass(device, pCreateInfo, pAllocator, pRenderPass);
+	g.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+		info.PipelineInfoMain.RenderPass = *pRenderPass;
+		info.PipelineInfoMain.Subpass = 0;
+		g.l.info("PipelineInfoMain.RenderPass");
+	});
+	// g.create_render_pass(device, pCreateInfo->pAttachments->format);
+	return result;
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateSwapchain(
 	VkDevice device,
 	const VkSwapchainCreateInfoKHR *pCreateInfo,
@@ -193,20 +254,37 @@ static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateSwapchain(
 ) {
 	g.l.debug("Q_CreateSwapchain");
 	std::shared_lock l(g.global_lock);
-	auto CreateSwapchain = g.device_dispatch[GetKey(device)].CreateSwapchainKHR;
+	auto &dt = g.device_dispatch[GetKey(device)];
 	l.unlock();
-	auto result = CreateSwapchain(device, pCreateInfo, pAllocator, pSwapchain);
+	auto result = dt.CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
 	auto h = pCreateInfo->imageExtent.height;
 	auto w = pCreateInfo->imageExtent.width;
-	if (result == VK_SUCCESS) {
-		std::unique_lock swl(g.sw_lock);
-		auto sw = vk::SwapchainKHR(*pSwapchain);
-		auto res = g.swapchains.find(sw);
-		if (res == g.swapchains.end()) {
-			g.count++;
-		}
-		g.swapchains.emplace(sw, SwapchainData{h, w});
+	ImGui::GetIO().DisplaySize = ImVec2(
+		static_cast<float>(h),
+		static_cast<float>(w)
+	);
+	if (result != VK_SUCCESS) {
+		return result;
 	}
+	uint32_t image_count = 0;
+	auto r = dt.GetSwapchainImagesKHR(device, *pSwapchain, &image_count, nullptr);
+	if (r != VK_SUCCESS) {
+		return result;
+	}
+	g.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+		info.MinImageCount = pCreateInfo->minImageCount;
+		info.ImageCount = image_count;
+		g.l.info("MinImageCount: {}", pCreateInfo->minImageCount);
+		g.l.info("ImageCount: {}", image_count);
+	});
+	g.init_imgui();
+	std::unique_lock swl(g.sw_lock);
+	auto sw = vk::SwapchainKHR(*pSwapchain);
+	auto res = g.swapchains.find(sw);
+	if (res == g.swapchains.end()) {
+		g.count++;
+	}
+	g.swapchains.emplace(sw, SwapchainData{h, w});
 	return result;
 }
 
@@ -248,11 +326,13 @@ static VKAPI_ATTR VkResult VKAPI_CALL Q_QueueSubmit(
 	return QueueSubmit(queue, submitCount, pSubmits, fence);
 }
 
-VkResult VKAPI_CALL
+VKAPI_ATTR VkResult VKAPI_CALL
 Q_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo) {
+	g.l.trace("Q_QueuePresentKHR");
+
 	auto now = std::chrono::high_resolution_clock::now();
 	auto elapsed = std::chrono::duration<double, std::milli>(now - g.last_frame);
-	auto d = elapsed.count();
+	g.frametime = elapsed.count();
 	g.last_frame = now;
 	// g.l.info(
 	// 	"frame time: {:.2f}ms ({:.1f} FPS)", elapsed.count(), 1000.0 / elapsed.count()
@@ -262,12 +342,27 @@ Q_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo) {
 	// 		"swapchain: [{}]: {}", i, (uint64_t)pPresentInfo->pSwapchains[i]
 	// 	);
 	// }
-
-	g.l.trace("Q_QueuePresentKHR");
 	std::shared_lock l(g.global_lock);
 	auto QueuePresent = g.device_dispatch[GetKey(queue)].QueuePresentKHR;
 	l.unlock();
 	return QueuePresent(queue, pPresentInfo);
+}
+
+void VKAPI_CALL
+Q_CmdEndRenderPass(VkCommandBuffer commandBuffer) {
+	g.l.trace("Q_CmdEndRenderPass");
+
+	std::shared_lock l(g.global_lock);
+	auto &dt = g.device_dispatch[GetKey(commandBuffer)];
+	l.unlock();
+
+	auto *data = g.imgui();
+	g.l.trace("data is null?: {}", data == nullptr);
+	g.l.trace("data valid: {}", data->Valid);
+	g.l.flush();
+	ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
+
+	dt.CmdEndRenderPass(commandBuffer);
 }
 
 extern "C" {
@@ -287,6 +382,12 @@ extern "C" {
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateSwapchain);
 		if (strcmp(pName, "vkDestroySwapchainKHR") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroySwapchain);
+		if (strcmp(pName, "vkGetDeviceQueue") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceQueue);
+		if (strcmp(pName, "vkCreateRenderPass") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateRenderPass);
+		if (strcmp(pName, "vkCmdEndRenderPass") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass);
 		{
 			std::shared_lock l(g.global_lock);
 			return g.device_dispatch[GetKey(device)].GetDeviceProcAddr(
@@ -313,6 +414,13 @@ extern "C" {
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueuePresentKHR);
 		if (strcmp(pName, "vkDestroySwapchainKHR") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroySwapchain);
+		if (strcmp(pName, "vkGetDeviceQueue") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceQueue);
+		if (strcmp(pName, "vkCreateRenderPass") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateRenderPass);
+		if (strcmp(pName, "vkCmdEndRenderPass") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass);
+
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
 		if (strcmp(pName, "vkCreateWaylandSurfaceKHR") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWaylandSurface);

@@ -2,6 +2,9 @@ module;
 
 #include <chrono>
 #include <cstdint>
+#include <format>
+#include <imgui.h>
+#include <imgui_impl_vulkan.h>
 #include <map>
 #include <memory>
 #include <shared_mutex>
@@ -16,8 +19,6 @@ module;
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_core.h>
-#include <imgui.h>
-#include <imgui_impl_vulkan.h>
 
 export module global_state;
 
@@ -34,9 +35,11 @@ export struct SwapchainData {
 
 export struct globals {
 	globals() : l(init_logger()) {
+		ImGui::SetCurrentContext(imgui_ctx.get());
 	}
 
 	~globals() {
+		ImGui_ImplVulkan_Shutdown();
 		std::shared_lock lock(sw_lock);
 		for (const auto &[swapchain, size] : swapchains) {
 			l.info(
@@ -51,7 +54,38 @@ export struct globals {
 		l.flush();
 	}
 
+	// imgui context
+	std::unique_ptr<ImGuiContext, decltype(&ImGui::DestroyContext)> imgui_ctx{
+		ImGui::CreateContext(),
+		&ImGui::DestroyContext
+	};
+	std::atomic_bool imgui_rendered{false};
+	ImDrawData *imgui() {
+		l.info("draw");
+		l.info("ImGui_ImplVulkan_NewFrame");
+		ImGui_ImplVulkan_NewFrame();
+
+		l.info("NewFrame");
+		ImGui::NewFrame();
+
+		l.info("Begin");
+		ImGui::Begin("q_overlay", nullptr);
+		ImGui::Text("%.6f", frametime);
+		// g.l.info(
+		// 	"frame time: {:.2f}ms ({:.1f} FPS)", elapsed.count(), 1000.0 / elapsed.count()
+		// );
+		ImGui::End();
+
+		l.info("Render");
+		ImGui::Render();
+		l.info("GetDrawData");
+		return ImGui::GetDrawData();
+	}
+
+	VkInstance instance;
+
 	spdlog::logger l;
+	double frametime = 0;
 	std::atomic_size_t count{0};
 	std::shared_mutex sw_lock;
 	std::map<vk::SwapchainKHR, SwapchainData> swapchains;
@@ -63,6 +97,80 @@ export struct globals {
 	std::shared_mutex init_info_lock;
 	ImGui_ImplVulkan_InitInfo init_info = {};
 
+	vk::DescriptorPool descriptor_pool;
+	VkRenderPass rpp;
+	void create_descriptor_pool(VkDevice device) {
+		update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+			info.DescriptorPoolSize = IMGUI_IMPL_VULKAN_MINIMUM_SAMPLED_IMAGE_POOL_SIZE;
+		});
+		return;
+		std::array<vk::DescriptorPoolSize, 2> pool_sizes{{{vk::DescriptorType::eSampledImage, IMGUI_IMPL_VULKAN_MINIMUM_SAMPLED_IMAGE_POOL_SIZE}, {vk::DescriptorType::eSampler, IMGUI_IMPL_VULKAN_MINIMUM_SAMPLER_POOL_SIZE}}};
+		vk::DescriptorPoolCreateInfo pool_info{
+			vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+			0,
+			pool_sizes
+		};
+		for (VkDescriptorPoolSize &pool_size : pool_sizes)
+			pool_info.maxSets += pool_size.descriptorCount;
+
+		std::shared_lock lock(global_lock);
+		auto &dt = device_dispatch[GetKey(device)];
+		lock.unlock();
+
+		VkDescriptorPool pool;
+		auto result = dt.CreateDescriptorPool(
+			device,
+			reinterpret_cast<const VkDescriptorPoolCreateInfo *>(&pool_info),
+			nullptr,
+			&pool
+		);
+		if (result != VK_SUCCESS) {
+			l.error("Cannot create vk::DescriptorPool");
+		}
+		descriptor_pool = pool;
+		update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+			info.DescriptorPool = pool;
+		});
+		l.info("Created vk::DescriptorPool");
+	}
+	void create_render_pass(VkDevice device, VkFormat format) {
+		VkAttachmentDescription attachment{};
+		attachment.format = format;
+		attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // don't clear, we're overlaying
+		attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		attachment.initialLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+		attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+		VkAttachmentReference color_ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+
+		VkSubpassDescription subpass{};
+		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpass.colorAttachmentCount = 1;
+		subpass.pColorAttachments = &color_ref;
+
+		VkRenderPassCreateInfo rp_info{};
+		rp_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		rp_info.attachmentCount = 1;
+		rp_info.pAttachments = &attachment;
+		rp_info.subpassCount = 1;
+		rp_info.pSubpasses = &subpass;
+
+		VkRenderPass rp;
+		std::shared_lock lock(global_lock);
+		auto &dt = device_dispatch[GetKey(device)];
+		lock.unlock();
+
+		auto result = dt.CreateRenderPass(device, &rp_info, nullptr, &rp); // imgui's loaded fn
+		l.info("Created RenderPass: {}", result == VK_SUCCESS);
+
+		update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) {
+			info.PipelineInfoMain.RenderPass = rp;
+			info.PipelineInfoMain.Subpass = 0;
+		});
+
+		rpp = rp;
+	}
 	static auto init_logger() -> spdlog::logger {
 		auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
 			"q_overlay.log", true
@@ -85,6 +193,12 @@ export struct globals {
 		std::forward<F>(func)(init_info);
 	}
 	auto init_imgui() -> void {
-		ImGui_ImplVulkan_Init(&init_info);
+		if (!imgui_rendered.exchange(true)) {
+			l.info("Calling ImGui_ImplVulkan_Init RenderPass: {:x}", (uint64_t)(VkRenderPass)init_info.PipelineInfoMain.RenderPass);
+			l.info("Calling ImGui_ImplVulkan_Init...");
+			auto res = ImGui_ImplVulkan_Init(&init_info);
+			l.info("Imgui init result: {}", res);
+			l.flush();
+		}
 	}
 };
