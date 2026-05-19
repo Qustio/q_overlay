@@ -28,6 +28,7 @@ target_sources(q_overlay PRIVATE
 	${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/imgui_demo.cpp
 	${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
 )
 

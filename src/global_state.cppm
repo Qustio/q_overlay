@@ -76,6 +76,8 @@ export struct globals {
 		// );
 		ImGui::End();
 
+		ImGui::ShowDemoWindow(nullptr);
+
 		l.info("Render");
 		ImGui::Render();
 		l.info("GetDrawData");

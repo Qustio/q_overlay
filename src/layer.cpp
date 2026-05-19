@@ -42,9 +42,9 @@ static void init_imgui_vulkan(VkInstance instance, VkDevice device, uint32_t api
 		auto *ld = reinterpret_cast<LoaderData *>(user_data);
 		std::shared_lock l(g.global_lock);
 		g.l.trace(name);
-		if (name == "vkCmdBeginRendering" || name == "vkCmdEndRendering" || name == "vkCmdBeginRenderingKHR" || name == "vkCmdEndRenderingKHR") {
-			return nullptr;
-		}
+		// if (name == "vkCmdBeginRendering" || name == "vkCmdEndRendering" || name == "vkCmdBeginRenderingKHR" || name == "vkCmdEndRenderingKHR") {
+		// 	return nullptr;
+		// }
 		PFN_vkVoidFunction device_addr = g.device_dispatch[GetKey(ld->device)].GetDeviceProcAddr(
 			ld->device, name
 		);
@@ -307,8 +307,11 @@ static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateSwapchain(
 	auto h = pCreateInfo->imageExtent.height;
 	auto w = pCreateInfo->imageExtent.width;
 	ImGui::GetIO().DisplaySize = ImVec2(
-		static_cast<float>(h),
-		static_cast<float>(w)
+		static_cast<float>(w),
+		static_cast<float>(h)
+	);
+	ImGui::GetIO().DisplayFramebufferScale = ImVec2(
+		1.5, 1.5
 	);
 	if (result != VK_SUCCESS) {
 		return result;
