@@ -252,6 +252,27 @@ static void VKAPI_CALL Q_GetDeviceQueue(
 	});
 }
 
+static void VKAPI_CALL Q_GetDeviceQueue2(
+	VkDevice device,
+	const VkDeviceQueueInfo2 *pQueueInfo,
+	VkQueue *pQueue
+) {
+	g.l.debug("Q_GetDeviceQueue2");
+	std::shared_lock l(g.global_lock);
+	auto GetDeviceQueue2 = g.device_dispatch[GetKey(device)].GetDeviceQueue2;
+	l.unlock();
+	GetDeviceQueue2(device, pQueueInfo, pQueue);
+	g.l.debug("Family: {} Queue: {}", pQueueInfo->queueFamilyIndex, pQueueInfo->queueIndex);
+	if (pQueueInfo->queueFamilyIndex != 0 || pQueueInfo->queueIndex != 0)
+		return;
+	g.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+		info.QueueFamily = pQueueInfo->queueFamilyIndex;
+		info.Queue = *pQueue;
+		g.l.info("Queue");
+		g.l.info("QueueFamily");
+	});
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateRenderPass(
 	VkDevice device,
 	const VkRenderPassCreateInfo *pCreateInfo,
@@ -390,6 +411,46 @@ Q_CmdEndRenderPass(VkCommandBuffer commandBuffer) {
 	dt.CmdEndRenderPass(commandBuffer);
 }
 
+void VKAPI_CALL
+Q_CmdEndRenderPass2(
+	VkCommandBuffer commandBuffer,
+	const VkSubpassEndInfo *pSubpassEndInfo
+) {
+	g.l.trace("Q_CmdEndRenderPass2");
+
+	std::shared_lock l(g.global_lock);
+	auto &dt = g.device_dispatch[GetKey(commandBuffer)];
+	l.unlock();
+
+	auto *data = g.imgui();
+	g.l.trace("data is null?: {}", data == nullptr);
+	g.l.trace("data valid: {}", data->Valid);
+	g.l.flush();
+	ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
+
+	dt.CmdEndRenderPass2(commandBuffer, pSubpassEndInfo);
+}
+
+void VKAPI_CALL
+Q_CmdEndRenderPass2KHR(
+	VkCommandBuffer commandBuffer,
+	const VkSubpassEndInfo *pSubpassEndInfo
+) {
+	g.l.trace("Q_CmdEndRenderPass2KHR");
+
+	std::shared_lock l(g.global_lock);
+	auto &dt = g.device_dispatch[GetKey(commandBuffer)];
+	l.unlock();
+
+	auto *data = g.imgui();
+	g.l.trace("data is null?: {}", data == nullptr);
+	g.l.trace("data valid: {}", data->Valid);
+	g.l.flush();
+	ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
+
+	dt.CmdEndRenderPass2KHR(commandBuffer, pSubpassEndInfo);
+}
+
 extern "C" {
 	EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 	Q_GetDeviceProcAddr(VkDevice device, const char *pName) {
@@ -409,10 +470,16 @@ extern "C" {
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroySwapchain);
 		if (strcmp(pName, "vkGetDeviceQueue") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceQueue);
+		if (strcmp(pName, "vkGetDeviceQueue2") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceQueue2);
 		if (strcmp(pName, "vkCreateRenderPass") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateRenderPass);
 		if (strcmp(pName, "vkCmdEndRenderPass") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass);
+		if (strcmp(pName, "vkCmdEndRenderPass2") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass2);
+		if (strcmp(pName, "vkCmdEndRenderPass2KHR") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass2KHR);
 		{
 			std::shared_lock l(g.global_lock);
 			return g.device_dispatch[GetKey(device)].GetDeviceProcAddr(
@@ -441,10 +508,16 @@ extern "C" {
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroySwapchain);
 		if (strcmp(pName, "vkGetDeviceQueue") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceQueue);
+		if (strcmp(pName, "vkGetDeviceQueue2") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceQueue2);
 		if (strcmp(pName, "vkCreateRenderPass") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateRenderPass);
 		if (strcmp(pName, "vkCmdEndRenderPass") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass);
+		if (strcmp(pName, "vkCmdEndRenderPass2") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass2);
+		if (strcmp(pName, "vkCmdEndRenderPass2KHR") == 0)
+			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass2KHR);
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
 		if (strcmp(pName, "vkCreateWaylandSurfaceKHR") == 0)
 			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWaylandSurface);
