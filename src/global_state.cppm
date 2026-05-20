@@ -2,7 +2,6 @@ module;
 
 #include <chrono>
 #include <cstdint>
-#include <format>
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
 #include <map>
@@ -24,7 +23,7 @@ export module global_state;
 
 // use the loader's dispatch table pointer as a key for dispatch map lookups
 export template <typename DispatchableType>
-void *GetKey(DispatchableType inst) {
+auto get_key(DispatchableType inst) -> void * {
 	return *reinterpret_cast<void **>(inst);
 }
 
@@ -33,7 +32,9 @@ export struct SwapchainData {
 	uint32_t w;
 };
 
-export struct globals {
+export class globals {
+	public:
+
 	globals() : l(init_logger()) {
 		ImGui::SetCurrentContext(imgui_ctx.get());
 	}
@@ -60,27 +61,16 @@ export struct globals {
 		&ImGui::DestroyContext
 	};
 	std::atomic_bool imgui_rendered{false};
-	ImDrawData *imgui() {
-		l.info("draw");
-		l.info("ImGui_ImplVulkan_NewFrame");
+	auto imgui() const -> ImDrawData * {
 		ImGui_ImplVulkan_NewFrame();
-
-		l.info("NewFrame");
 		ImGui::NewFrame();
 
-		l.info("Begin");
 		ImGui::Begin("q_overlay", nullptr);
 		ImGui::Text("%.6f", frametime);
-		// g.l.info(
-		// 	"frame time: {:.2f}ms ({:.1f} FPS)", elapsed.count(), 1000.0 / elapsed.count()
-		// );
 		ImGui::End();
-
 		ImGui::ShowDemoWindow(nullptr);
 
-		l.info("Render");
 		ImGui::Render();
-		l.info("GetDrawData");
 		return ImGui::GetDrawData();
 	}
 
@@ -100,7 +90,7 @@ export struct globals {
 	ImGui_ImplVulkan_InitInfo init_info = {};
 
 	vk::DescriptorPool descriptor_pool;
-	VkRenderPass rpp;
+	vk::RenderPass render_pass;
 	void create_descriptor_pool(VkDevice device) {
 		update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
 			info.DescriptorPoolSize = IMGUI_IMPL_VULKAN_MINIMUM_SAMPLED_IMAGE_POOL_SIZE;
@@ -112,15 +102,18 @@ export struct globals {
 			0,
 			pool_sizes
 		};
-		for (VkDescriptorPoolSize &pool_size : pool_sizes)
+		for (VkDescriptorPoolSize &pool_size : pool_sizes) {
 			pool_info.maxSets += pool_size.descriptorCount;
+		}
 
-		std::shared_lock lock(global_lock);
-		auto &dt = device_dispatch[GetKey(device)];
-		lock.unlock();
+		PFN_vkCreateDescriptorPool func;
+		{
+			std::shared_lock lock(global_lock);
+			func = device_dispatch[get_key(device)].CreateDescriptorPool;
+		}
 
 		VkDescriptorPool pool;
-		auto result = dt.CreateDescriptorPool(
+		auto result = func(
 			device,
 			reinterpret_cast<const VkDescriptorPoolCreateInfo *>(&pool_info),
 			nullptr,
@@ -144,7 +137,10 @@ export struct globals {
 		attachment.initialLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 		attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-		VkAttachmentReference color_ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+		VkAttachmentReference color_ref{
+			.attachment=0,
+			.layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+		};
 
 		VkSubpassDescription subpass{};
 		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -158,20 +154,22 @@ export struct globals {
 		rp_info.subpassCount = 1;
 		rp_info.pSubpasses = &subpass;
 
-		VkRenderPass rp;
-		std::shared_lock lock(global_lock);
-		auto &dt = device_dispatch[GetKey(device)];
-		lock.unlock();
+		VkRenderPass rpass;
+		PFN_vkCreateRenderPass func;
+		{
+			std::shared_lock lock(global_lock);
+			func = device_dispatch[get_key(device)].CreateRenderPass;
+		}
 
-		auto result = dt.CreateRenderPass(device, &rp_info, nullptr, &rp); // imgui's loaded fn
+		auto result = func(device, &rp_info, nullptr, &rpass); // imgui's loaded fn
 		l.info("Created RenderPass: {}", result == VK_SUCCESS);
 
-		update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) {
-			info.PipelineInfoMain.RenderPass = rp;
+		update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+			info.PipelineInfoMain.RenderPass = rpass;
 			info.PipelineInfoMain.Subpass = 0;
 		});
 
-		rpp = rp;
+		render_pass = rpass;
 	}
 	static auto init_logger() -> spdlog::logger {
 		auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
@@ -198,7 +196,9 @@ export struct globals {
 		init_imgui();
 	}
 	auto init_imgui() -> void {
-		if (imgui_rendered.load()) return;
+		if (imgui_rendered.load()) {
+			return;
+		}
 		{
 			std::shared_lock lock{init_info_lock};
 			bool ready = true;
@@ -226,10 +226,12 @@ export struct globals {
 				l.warn("init_imgui: RenderPass null");
 				ready = false;
 			}
-			if (!ready) return;
+			if (!ready) {
+				return;
+			}
 		}
 		if (!imgui_rendered.exchange(true)) {
-			l.info("Calling ImGui_ImplVulkan_Init RenderPass: {:x}", (uint64_t)(VkRenderPass)init_info.PipelineInfoMain.RenderPass);
+			l.info("Calling ImGui_ImplVulkan_Init RenderPass: {:x}", (uint64_t)init_info.PipelineInfoMain.RenderPass);
 			l.info("Calling ImGui_ImplVulkan_Init...");
 			auto res = ImGui_ImplVulkan_Init(&init_info);
 			l.info("Imgui init result: {}", res);

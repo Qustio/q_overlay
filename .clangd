@@ -16,3 +16,5 @@ Diagnostics:
       - concurrency-*
       - portability-*
       - misc-*
+    Remove:
+      - misc-non-private-member-variables-in-classes

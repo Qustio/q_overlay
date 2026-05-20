@@ -1,6 +1,5 @@
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
 #include <map>
@@ -23,532 +22,543 @@ import global_state;
 	#define EXPORT
 #endif
 
-static globals g;
-
-// https://github.com/ocornut/imgui/issues/4854#issuecomment-1783950012
-static void init_imgui_vulkan(VkInstance instance, VkDevice device, uint32_t api_version) {
-	g.l.info("Vulkan API version: {}.{}.{}", VK_API_VERSION_MAJOR(api_version), VK_API_VERSION_MINOR(api_version), VK_API_VERSION_PATCH(api_version));
-	struct LoaderData {
-		VkInstance instance;
-		VkDevice device;
-	};
-	static LoaderData loader_data{
-		.instance = instance,
-		.device = device
-	};
-	auto res = ImGui_ImplVulkan_LoadFunctions(
-		api_version,
-		[](const char *name, void *user_data) -> PFN_vkVoidFunction {
-		auto *ld = reinterpret_cast<LoaderData *>(user_data);
-		std::shared_lock l(g.global_lock);
-		g.l.trace(name);
-		// if (name == "vkCmdBeginRendering" || name == "vkCmdEndRendering" || name == "vkCmdBeginRenderingKHR" || name == "vkCmdEndRenderingKHR") {
-		// 	return nullptr;
-		// }
-		PFN_vkVoidFunction device_addr = g.device_dispatch[GetKey(ld->device)].GetDeviceProcAddr(
-			ld->device, name
+namespace {
+	globals state;
+	// https://github.com/ocornut/imgui/issues/4854#issuecomment-1783950012
+	void init_imgui_vulkan(
+		VkInstance instance,
+		VkDevice device,
+		uint32_t api_version
+	) {
+		state.l.info(
+			"Vulkan API version: {}.{}.{}",
+			VK_API_VERSION_MAJOR(api_version),
+			VK_API_VERSION_MINOR(api_version),
+			VK_API_VERSION_PATCH(api_version)
 		);
-		if (device_addr) {
-			g.l.trace("device");
-			return device_addr;
+		struct loader_data {
+			VkInstance instance;
+			VkDevice device;
+		};
+		static loader_data loaders{
+			.instance = instance,
+			.device = device
+		};
+		auto res = ImGui_ImplVulkan_LoadFunctions(
+			api_version,
+			[](const char *name, void *user_data) -> PFN_vkVoidFunction {
+				state.l.trace(name);
+				// if (name == "vkCmdBeginRendering" || name == "vkCmdEndRendering" || name == "vkCmdBeginRenderingKHR" || name == "vkCmdEndRenderingKHR") {
+				// 	return nullptr;
+				// }
+
+				auto *data = reinterpret_cast<loader_data *>(user_data);
+				PFN_vkGetDeviceProcAddr device_func;
+				PFN_vkGetInstanceProcAddr instance_func;
+				{
+					std::shared_lock lock(state.global_lock);
+					device_func = state.device_dispatch[get_key(data->device)].GetDeviceProcAddr;
+					instance_func = state.instance_dispatch[get_key(data->instance)].GetInstanceProcAddr;
+				}
+				auto device_addr = device_func(data->device, name);
+				if (device_addr) {
+					state.l.trace("device");
+					return device_addr;
+				}
+				auto instance_addr = instance_func(data->instance, name);
+				if (instance_addr) {
+					state.l.trace("instance");
+					return instance_addr;
+				}
+				state.l.trace("unknown function");
+				state.l.flush();
+				return nullptr;
+			},
+			&loaders
+		);
+		state.l.info("ImGui_ImplVulkan_LoadFunctions returned: {}", res);
+	}
+
+	VKAPI_ATTR auto VKAPI_CALL
+	Q_CreateInstance(
+		const VkInstanceCreateInfo *pCreateInfo,
+		const VkAllocationCallbacks *pAllocator,
+		VkInstance *pInstance
+	) -> VkResult {
+		state.l.trace(__func__);
+
+		auto *layerCreateInfo =
+			reinterpret_cast<VkLayerInstanceCreateInfo *>(
+				const_cast<void *>(pCreateInfo->pNext)
+			);
+		while (
+			(layerCreateInfo != nullptr)
+			&& (layerCreateInfo->sType != VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO
+				|| layerCreateInfo->function != VK_LAYER_LINK_INFO)) {
+			layerCreateInfo = reinterpret_cast<VkLayerInstanceCreateInfo *>(
+				const_cast<void *>(layerCreateInfo->pNext)
+			);
 		}
-		PFN_vkVoidFunction instance_addr = g.instance_dispatch[GetKey(ld->instance)].GetInstanceProcAddr(
-			ld->instance, name
-		);
-		if (instance_addr) {
-			g.l.trace("instance");
-			return instance_addr;
+		if (layerCreateInfo == nullptr) {
+			return VK_ERROR_INITIALIZATION_FAILED;
 		}
-		g.l.trace("what");
-		g.l.flush();
-		return nullptr;
-	},
-		&loader_data
-	);
-	g.l.info("ImGui_ImplVulkan_LoadFunctions result: {}", res);
-}
 
-static VkResult VKAPI_CALL Q_CreateInstance(
-	const VkInstanceCreateInfo *pCreateInfo,
-	const VkAllocationCallbacks *pAllocator,
-	VkInstance *pInstance
-) {
-	g.l.trace("Q_CreateInstance called");
-	g.l.flush();
-	VkLayerInstanceCreateInfo *layerCreateInfo =
-		reinterpret_cast<VkLayerInstanceCreateInfo *>(
-			const_cast<void *>(pCreateInfo->pNext)
+		PFN_vkGetInstanceProcAddr gipa =
+			layerCreateInfo->u.pLayerInfo->pfnNextGetInstanceProcAddr;
+		// advance chain
+		layerCreateInfo->u.pLayerInfo = layerCreateInfo->u.pLayerInfo->pNext;
+
+		auto fn_CreateInstance = reinterpret_cast<PFN_vkCreateInstance>(
+			gipa(VK_NULL_HANDLE, "vkCreateInstance")
 		);
-	while (layerCreateInfo
-		   && (layerCreateInfo->sType
-				   != VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO
-			   || layerCreateInfo->function != VK_LAYER_LINK_INFO)) {
-		layerCreateInfo = reinterpret_cast<VkLayerInstanceCreateInfo *>(
-			const_cast<void *>(layerCreateInfo->pNext)
+		if (fn_CreateInstance == nullptr) {
+			return VK_ERROR_INITIALIZATION_FAILED;
+		}
+
+		VkResult result = fn_CreateInstance(pCreateInfo, pAllocator, pInstance);
+		if (result != VK_SUCCESS) {
+			return result;
+		}
+
+		VkuInstanceDispatchTable dispatchTable{};
+		vkuInitInstanceDispatchTable(
+			*pInstance,
+			&dispatchTable,
+			gipa
 		);
-	}
-	if (!layerCreateInfo)
-		return VK_ERROR_INITIALIZATION_FAILED;
 
-	PFN_vkGetInstanceProcAddr gipa =
-		layerCreateInfo->u.pLayerInfo->pfnNextGetInstanceProcAddr;
-	// advance chain
-	layerCreateInfo->u.pLayerInfo = layerCreateInfo->u.pLayerInfo->pNext;
+		{
+			std::unique_lock lock(state.global_lock);
+			state.instance_dispatch[get_key(*pInstance)] = dispatchTable;
+			state.instance = *pInstance;
+		}
 
-	PFN_vkCreateInstance fpCreate = reinterpret_cast<PFN_vkCreateInstance>(
-		gipa(VK_NULL_HANDLE, "vkCreateInstance")
-	);
-	if (!fpCreate)
-		return VK_ERROR_INITIALIZATION_FAILED;
+		state.update_imgui_init_info([&](auto &info) -> void {
+			info.Instance = *pInstance;
+			info.ApiVersion = pCreateInfo->pApplicationInfo->apiVersion;
+		});
 
-	VkResult result = fpCreate(pCreateInfo, pAllocator, pInstance);
-	if (result != VK_SUCCESS)
-		return result;
-
-	VkuInstanceDispatchTable dispatchTable{};
-	vkuInitInstanceDispatchTable(
-		*pInstance,
-		&dispatchTable,
-		gipa
-	);
-
-	{
-		std::unique_lock l(g.global_lock);
-		g.instance_dispatch[GetKey(*pInstance)] = dispatchTable;
-		g.instance = *pInstance;
+		return VK_SUCCESS;
 	}
 
-	// init_imgui_vulkan(*pInstance, pCreateInfo->pApplicationInfo->apiVersion);
-	g.update_imgui_init_info([&](auto &info) -> void {
-		info.Instance = *pInstance;
-		info.ApiVersion = pCreateInfo->pApplicationInfo->apiVersion;
-	});
+	VKAPI_ATTR auto VKAPI_CALL
+	Q_CreateDevice(
+		VkPhysicalDevice physicalDevice,
+		const VkDeviceCreateInfo *pCreateInfo,
+		const VkAllocationCallbacks *pAllocator,
+		VkDevice *pDevice
+	) -> VkResult {
+		state.l.trace(__func__);
 
-	return VK_SUCCESS;
-}
+		auto *layerCreateInfo =
+			reinterpret_cast<VkLayerDeviceCreateInfo *>(
+				const_cast<void *>(pCreateInfo->pNext)
+			);
+		while (
+			(layerCreateInfo != nullptr)
+			&& (layerCreateInfo->sType != VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO
+				|| layerCreateInfo->function != VK_LAYER_LINK_INFO)) {
+			layerCreateInfo = reinterpret_cast<VkLayerDeviceCreateInfo *>(
+				const_cast<void *>(layerCreateInfo->pNext)
+			);
+		}
+		if (layerCreateInfo == nullptr) {
+			return VK_ERROR_INITIALIZATION_FAILED;
+		}
 
-static VkResult VKAPI_CALL Q_CreateDevice(
-	VkPhysicalDevice physicalDevice,
-	const VkDeviceCreateInfo *pCreateInfo,
-	const VkAllocationCallbacks *pAllocator,
-	VkDevice *pDevice
-) {
-	g.l.trace("Q_CreateDevice called");
-	VkLayerDeviceCreateInfo *layerCreateInfo =
-		reinterpret_cast<VkLayerDeviceCreateInfo *>(
-			const_cast<void *>(pCreateInfo->pNext)
+		PFN_vkGetInstanceProcAddr gipa =
+			layerCreateInfo->u.pLayerInfo->pfnNextGetInstanceProcAddr;
+		PFN_vkGetDeviceProcAddr gdpa =
+			layerCreateInfo->u.pLayerInfo->pfnNextGetDeviceProcAddr;
+
+		// advance chain
+		layerCreateInfo->u.pLayerInfo = layerCreateInfo->u.pLayerInfo->pNext;
+
+		auto fn_CreateDevice = reinterpret_cast<PFN_vkCreateDevice>(
+			gipa(VK_NULL_HANDLE, "vkCreateDevice")
 		);
-	while (layerCreateInfo
-		   && (layerCreateInfo->sType
-				   != VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO
-			   || layerCreateInfo->function != VK_LAYER_LINK_INFO)) {
-		layerCreateInfo = reinterpret_cast<VkLayerDeviceCreateInfo *>(
-			const_cast<void *>(layerCreateInfo->pNext)
+		if (fn_CreateDevice == nullptr) {
+			return VK_ERROR_INITIALIZATION_FAILED;
+		}
+
+		VkResult result =
+			fn_CreateDevice(physicalDevice, pCreateInfo, pAllocator, pDevice);
+		if (result != VK_SUCCESS) {
+			return result;
+		}
+
+		VkuDeviceDispatchTable dispatchTable{};
+		vkuInitDeviceDispatchTable(
+			*pDevice,
+			&dispatchTable,
+			gdpa
 		);
+
+		// store the table by key
+		{
+			std::unique_lock lock(state.global_lock);
+			state.device_dispatch[get_key(*pDevice)] = dispatchTable;
+		}
+
+		uint32_t api;
+		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+			api = info.ApiVersion;
+			info.PhysicalDevice = physicalDevice;
+			info.Device = *pDevice;
+			state.l.info("PhysicalDevice");
+			state.l.info("Device");
+		});
+		init_imgui_vulkan(state.instance, *pDevice, api);
+
+		state.create_descriptor_pool(*pDevice);
+
+		return VK_SUCCESS;
 	}
-	if (!layerCreateInfo)
-		return VK_ERROR_INITIALIZATION_FAILED;
-
-	PFN_vkGetInstanceProcAddr gipa =
-		layerCreateInfo->u.pLayerInfo->pfnNextGetInstanceProcAddr;
-	PFN_vkGetDeviceProcAddr gdpa =
-		layerCreateInfo->u.pLayerInfo->pfnNextGetDeviceProcAddr;
-
-	// advance chain
-	layerCreateInfo->u.pLayerInfo = layerCreateInfo->u.pLayerInfo->pNext;
-
-	auto fpCreate = reinterpret_cast<PFN_vkCreateDevice>(
-		gipa(VK_NULL_HANDLE, "vkCreateDevice")
-	);
-	if (!fpCreate)
-		return VK_ERROR_INITIALIZATION_FAILED;
-
-	VkResult result =
-		fpCreate(physicalDevice, pCreateInfo, pAllocator, pDevice);
-	if (result != VK_SUCCESS)
-		return result;
-
-	VkuDeviceDispatchTable dispatchTable{};
-	vkuInitDeviceDispatchTable(
-		*pDevice,
-		&dispatchTable,
-		gdpa
-	);
-
-	// store the table by key
-	{
-		std::unique_lock l(g.global_lock);
-		g.device_dispatch[GetKey(*pDevice)] = dispatchTable;
-	}
-
-	uint32_t api;
-	g.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-		api = info.ApiVersion;
-		info.PhysicalDevice = physicalDevice;
-		info.Device = *pDevice;
-		g.l.info("PhysicalDevice");
-		g.l.info("Device");
-	});
-	init_imgui_vulkan(g.instance, *pDevice, api);
-
-	g.create_descriptor_pool(*pDevice);
-
-	return VK_SUCCESS;
-}
 
 #ifdef VK_USE_PLATFORM_WIN32_KHR
+	VKAPI_ATTR auto VKAPI_CALL
+	Q_CreateWin32Surface(
+		VkInstance instance,
+		const VkWin32SurfaceCreateInfoKHR *pCreateInfo,
+		const VkAllocationCallbacks *pAllocator,
+		VkSurfaceKHR *pSurface
+	) -> VkResult {
+		state.l.trace(__func__);
 
-static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateWin32Surface(
-	VkInstance instance,
-	const VkWin32SurfaceCreateInfoKHR *pCreateInfo,
-	const VkAllocationCallbacks *pAllocator,
-	VkSurfaceKHR *pSurface
-) {
-	g.l.trace("Q_CreateWin32Surface");
-	std::shared_lock l(g.global_lock);
-	auto CreateWin32SurfaceKHR = g.instance_dispatch[GetKey(instance)].CreateWin32SurfaceKHR;
-	l.unlock();
-	auto result = CreateWin32SurfaceKHR(instance, pCreateInfo, pAllocator, pSurface);
-	return result;
-}
+		PFN_vkCreateWin32SurfaceKHR func;
+		{
+			std::shared_lock lock(state.global_lock);
+			func = state.instance_dispatch[get_key(instance)].CreateWin32SurfaceKHR;
+		}
+		return func(instance, pCreateInfo, pAllocator, pSurface);
+	}
 
 #endif
 
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
-static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateWaylandSurface(
-	VkInstance instance,
-	const VkWaylandSurfaceCreateInfoKHR *pCreateInfo,
-	const VkAllocationCallbacks *pAllocator,
-	VkSurfaceKHR *pSurface
-) {
-	g.l.debug("Q_CreateWaylandSurface");
-	std::shared_lock l(g.global_lock);
-	auto CreateWaylandSurfaceKHR = g.instance_dispatch[GetKey(instance)].CreateWaylandSurfaceKHR;
-	l.unlock();
-	auto result = CreateWaylandSurfaceKHR(instance, pCreateInfo, pAllocator, pSurface);
-	return result;
-}
+	VKAPI_ATTR auto VKAPI_CALL
+	Q_CreateWaylandSurface(
+		VkInstance instance,
+		const VkWaylandSurfaceCreateInfoKHR *pCreateInfo,
+		const VkAllocationCallbacks *pAllocator,
+		VkSurfaceKHR *pSurface
+	) -> VkResult {
+		g.l.debug(__func__);
+
+		PFN_vkCreateWaylandSurfaceKHR func;
+		{
+			std::shared_lock lock(state.global_lock);
+			func = state.instance_dispatch[get_key(instance)].CreateWaylandSurfaceKHR;
+		}
+		return func(instance, pCreateInfo, pAllocator, pSurface);
+	}
 #endif
 
-static void VKAPI_CALL Q_GetDeviceQueue(
-	VkDevice device,
-	uint32_t queueFamilyIndex,
-	uint32_t queueIndex,
-	VkQueue *pQueue
-) {
-	g.l.debug("Q_GetDeviceQueue");
-	std::shared_lock l(g.global_lock);
-	auto GetDeviceQueue = g.device_dispatch[GetKey(device)].GetDeviceQueue;
-	l.unlock();
-	GetDeviceQueue(device, queueFamilyIndex, queueIndex, pQueue);
-	g.l.debug("Family: {} Queue: {}", queueFamilyIndex, queueIndex);
-	if (queueFamilyIndex != 0 || queueFamilyIndex != 0)
-		return;
-	g.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-		info.QueueFamily = queueFamilyIndex;
-		info.Queue = *pQueue;
-		g.l.info("Queue");
-		g.l.info("QueueFamily");
-	});
-}
+	VKAPI_ATTR void VKAPI_CALL
+	Q_GetDeviceQueue(
+		VkDevice device,
+		uint32_t queueFamilyIndex,
+		uint32_t queueIndex,
+		VkQueue *pQueue
+	) {
+		state.l.debug(__func__);
 
-static void VKAPI_CALL Q_GetDeviceQueue2(
-	VkDevice device,
-	const VkDeviceQueueInfo2 *pQueueInfo,
-	VkQueue *pQueue
-) {
-	g.l.debug("Q_GetDeviceQueue2");
-	std::shared_lock l(g.global_lock);
-	auto GetDeviceQueue2 = g.device_dispatch[GetKey(device)].GetDeviceQueue2;
-	l.unlock();
-	GetDeviceQueue2(device, pQueueInfo, pQueue);
-	g.l.debug("Family: {} Queue: {}", pQueueInfo->queueFamilyIndex, pQueueInfo->queueIndex);
-	if (pQueueInfo->queueFamilyIndex != 0 || pQueueInfo->queueIndex != 0)
-		return;
-	g.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-		info.QueueFamily = pQueueInfo->queueFamilyIndex;
-		info.Queue = *pQueue;
-		g.l.info("Queue");
-		g.l.info("QueueFamily");
-	});
-}
+		PFN_vkGetDeviceQueue func;
+		{
+			std::shared_lock lock(state.global_lock);
+			func = state.device_dispatch[get_key(device)].GetDeviceQueue;
+		}
+		func(device, queueFamilyIndex, queueIndex, pQueue);
+		state.l.debug("Family: {} Queue: {}", queueFamilyIndex, queueIndex);
+		if (queueFamilyIndex != 0 || queueIndex != 0) {
+			return;
+		}
+		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+			info.QueueFamily = queueFamilyIndex;
+			info.Queue = *pQueue;
+			state.l.info("Queue");
+			state.l.info("QueueFamily");
+		});
+	}
 
-static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateRenderPass(
-	VkDevice device,
-	const VkRenderPassCreateInfo *pCreateInfo,
-	const VkAllocationCallbacks *pAllocator,
-	VkRenderPass *pRenderPass
-) {
-	g.l.debug("Q_CreateRenderPass");
-	std::shared_lock l(g.global_lock);
-	auto &dt = g.device_dispatch[GetKey(device)];
-	l.unlock();
-	auto result = dt.CreateRenderPass(device, pCreateInfo, pAllocator, pRenderPass);
-	g.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-		info.PipelineInfoMain.RenderPass = *pRenderPass;
-		info.PipelineInfoMain.Subpass = 0;
-		g.l.info("PipelineInfoMain.RenderPass");
-	});
-	// g.create_render_pass(device, pCreateInfo->pAttachments->format);
-	return result;
-}
+	VKAPI_ATTR void VKAPI_CALL
+	Q_GetDeviceQueue2(
+		VkDevice device,
+		const VkDeviceQueueInfo2 *pQueueInfo,
+		VkQueue *pQueue
+	) {
+		state.l.debug(__func__);
 
-static VKAPI_ATTR VkResult VKAPI_CALL Q_CreateSwapchain(
-	VkDevice device,
-	const VkSwapchainCreateInfoKHR *pCreateInfo,
-	const VkAllocationCallbacks *pAllocator,
-	VkSwapchainKHR *pSwapchain
-) {
-	g.l.debug("Q_CreateSwapchain");
-	std::shared_lock l(g.global_lock);
-	auto &dt = g.device_dispatch[GetKey(device)];
-	l.unlock();
-	auto result = dt.CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
-	auto h = pCreateInfo->imageExtent.height;
-	auto w = pCreateInfo->imageExtent.width;
-	ImGui::GetIO().DisplaySize = ImVec2(
-		static_cast<float>(w),
-		static_cast<float>(h)
-	);
-	ImGui::GetIO().DisplayFramebufferScale = ImVec2(
-		1.5, 1.5
-	);
-	if (result != VK_SUCCESS) {
+		PFN_vkGetDeviceQueue2 func;
+		{
+			std::shared_lock lock(state.global_lock);
+			func = state.device_dispatch[get_key(device)].GetDeviceQueue2;
+		}
+		func(device, pQueueInfo, pQueue);
+		state.l.debug("Family: {} Queue: {}", pQueueInfo->queueFamilyIndex, pQueueInfo->queueIndex);
+		if (pQueueInfo->queueFamilyIndex != 0 || pQueueInfo->queueIndex != 0) {
+			return;
+		}
+		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+			info.QueueFamily = pQueueInfo->queueFamilyIndex;
+			info.Queue = *pQueue;
+			state.l.info("Queue");
+			state.l.info("QueueFamily");
+		});
+	}
+
+	VKAPI_ATTR auto VKAPI_CALL
+	Q_CreateRenderPass(
+		VkDevice device,
+		const VkRenderPassCreateInfo *pCreateInfo,
+		const VkAllocationCallbacks *pAllocator,
+		VkRenderPass *pRenderPass
+	) -> VkResult {
+		state.l.debug(__func__);
+
+		PFN_vkCreateRenderPass func;
+		{
+			std::shared_lock lock(state.global_lock);
+			func = state.device_dispatch[get_key(device)].CreateRenderPass;
+		}
+		auto result = func(device, pCreateInfo, pAllocator, pRenderPass);
+		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+			info.PipelineInfoMain.RenderPass = *pRenderPass;
+			info.PipelineInfoMain.Subpass = 0;
+			state.l.info("PipelineInfoMain.RenderPass");
+		});
+		// g.create_render_pass(device, pCreateInfo->pAttachments->format);
 		return result;
 	}
-	uint32_t image_count = 0;
-	auto r = dt.GetSwapchainImagesKHR(device, *pSwapchain, &image_count, nullptr);
-	if (r != VK_SUCCESS) {
+
+	VKAPI_ATTR auto VKAPI_CALL
+	Q_CreateSwapchain(
+		VkDevice device,
+		const VkSwapchainCreateInfoKHR *pCreateInfo,
+		const VkAllocationCallbacks *pAllocator,
+		VkSwapchainKHR *pSwapchain
+	) -> VkResult {
+		state.l.debug(__func__);
+
+		PFN_vkCreateSwapchainKHR func_cs;
+		PFN_vkGetSwapchainImagesKHR func_gsi;
+		{
+			std::shared_lock lock(state.global_lock);
+			func_cs = state.device_dispatch[get_key(device)].CreateSwapchainKHR;
+			func_gsi = state.device_dispatch[get_key(device)].GetSwapchainImagesKHR;
+		}
+		auto result = func_cs(device, pCreateInfo, pAllocator, pSwapchain);
+		ImGui::GetIO().DisplaySize = ImVec2(
+			static_cast<float>(pCreateInfo->imageExtent.width),
+			static_cast<float>(pCreateInfo->imageExtent.height)
+		);
+		ImGui::GetIO().DisplayFramebufferScale = ImVec2(
+			1.5, 1.5
+		);
+		if (result != VK_SUCCESS) {
+			return result;
+		}
+		uint32_t image_count = 0;
+		if (func_gsi(device, *pSwapchain, &image_count, nullptr) != VK_SUCCESS) {
+			return result;
+		}
+		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+			info.MinImageCount = pCreateInfo->minImageCount;
+			info.ImageCount = image_count;
+			state.l.info("MinImageCount: {}", pCreateInfo->minImageCount);
+			state.l.info("ImageCount: {}", image_count);
+		});
 		return result;
 	}
-	g.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-		info.MinImageCount = pCreateInfo->minImageCount;
-		info.ImageCount = image_count;
-		g.l.info("MinImageCount: {}", pCreateInfo->minImageCount);
-		g.l.info("ImageCount: {}", image_count);
-	});
-	std::unique_lock swl(g.sw_lock);
-	auto sw = vk::SwapchainKHR(*pSwapchain);
-	auto res = g.swapchains.find(sw);
-	if (res == g.swapchains.end()) {
-		g.count++;
+
+	VKAPI_ATTR void VKAPI_CALL
+	Q_DestroySwapchain(
+		VkDevice device,
+		VkSwapchainKHR swapchain,
+		const VkAllocationCallbacks *pAllocator
+	) {
+		state.l.debug(__func__);
+
+		PFN_vkDestroySwapchainKHR func;
+		{
+			std::shared_lock lock(state.global_lock);
+			func = state.device_dispatch[get_key(device)].DestroySwapchainKHR;
+		}
+		func(device, swapchain, pAllocator);
 	}
-	g.swapchains.emplace(sw, SwapchainData{h, w});
-	return result;
-}
 
-static void VKAPI_CALL Q_DestroySwapchain(
-	VkDevice device,
-	VkSwapchainKHR swapchain,
-	const VkAllocationCallbacks *pAllocator
-) {
-	g.l.debug("Q_DestroySwapchain");
-	std::shared_lock l(g.global_lock);
-	auto DestroySwapchain = g.device_dispatch[GetKey(device)].DestroySwapchainKHR;
-	l.unlock();
-	DestroySwapchain(device, swapchain, pAllocator);
-	std::unique_lock swl(g.sw_lock);
-	auto sw = vk::SwapchainKHR(swapchain);
-	g.swapchains.erase(sw);
-	g.count--;
-}
+	VKAPI_ATTR void VKAPI_CALL
+	Q_DestroyDevice(
+		VkDevice device,
+		const VkAllocationCallbacks *pAllocator
+	) {
+		state.l.trace(__func__);
 
-static void VKAPI_CALL
-Q_DestroyDevice(VkDevice device, const VkAllocationCallbacks *pAllocator) {
-	std::unique_lock l(g.global_lock);
-	auto DestroyDevice = g.device_dispatch[GetKey(device)].DestroyDevice;
-	g.device_dispatch.erase(GetKey(device));
-	l.unlock();
-	DestroyDevice(device, pAllocator);
-}
+		PFN_vkDestroyDevice func;
+		{
+			std::unique_lock lock(state.global_lock);
+			func = state.device_dispatch[get_key(device)].DestroyDevice;
+			state.device_dispatch.erase(get_key(device));
+		}
+		func(device, pAllocator);
+	}
 
-static VKAPI_ATTR VkResult VKAPI_CALL Q_QueueSubmit(
-	VkQueue queue,
-	uint32_t submitCount,
-	const VkSubmitInfo *pSubmits,
-	VkFence fence
-) {
-	g.l.trace("Q_QueueSubmit");
-	std::shared_lock l(g.global_lock);
-	auto QueueSubmit = g.device_dispatch[GetKey(queue)].QueueSubmit;
-	l.unlock();
-	return QueueSubmit(queue, submitCount, pSubmits, fence);
-}
+	VKAPI_ATTR auto VKAPI_CALL
+	Q_QueueSubmit(
+		VkQueue queue,
+		uint32_t submitCount,
+		const VkSubmitInfo *pSubmits,
+		VkFence fence
+	) -> VkResult {
+		state.l.trace(__func__);
 
-VKAPI_ATTR VkResult VKAPI_CALL
-Q_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo) {
-	g.l.trace("Q_QueuePresentKHR");
+		PFN_vkQueueSubmit func;
+		{
+			std::shared_lock lock(state.global_lock);
+			func = state.device_dispatch[get_key(queue)].QueueSubmit;
+		}
+		return func(queue, submitCount, pSubmits, fence);
+	}
 
-	auto now = std::chrono::high_resolution_clock::now();
-	auto elapsed = std::chrono::duration<double, std::milli>(now - g.last_frame);
-	g.frametime = elapsed.count();
-	g.last_frame = now;
-	// g.l.info(
-	// 	"frame time: {:.2f}ms ({:.1f} FPS)", elapsed.count(), 1000.0 / elapsed.count()
-	// );
-	// for (int i = 0; i < pPresentInfo->swapchainCount; i++) {
-	// 	g.l.info(
-	// 		"swapchain: [{}]: {}", i, (uint64_t)pPresentInfo->pSwapchains[i]
-	// 	);
-	// }
-	std::shared_lock l(g.global_lock);
-	auto QueuePresent = g.device_dispatch[GetKey(queue)].QueuePresentKHR;
-	l.unlock();
-	return QueuePresent(queue, pPresentInfo);
-}
+	VKAPI_ATTR auto VKAPI_CALL
+	Q_QueuePresentKHR(
+		VkQueue queue,
+		const VkPresentInfoKHR *pPresentInfo
+	) -> VkResult {
+		state.l.trace(__func__);
 
-void VKAPI_CALL
-Q_CmdEndRenderPass(VkCommandBuffer commandBuffer) {
-	g.l.trace("Q_CmdEndRenderPass");
+		PFN_vkQueuePresentKHR func;
+		{
+			std::shared_lock lock(state.global_lock);
+			func = state.device_dispatch[get_key(queue)].QueuePresentKHR;
+		}
 
-	std::shared_lock l(g.global_lock);
-	auto &dt = g.device_dispatch[GetKey(commandBuffer)];
-	l.unlock();
+		auto result = func(queue, pPresentInfo);
+		auto now = std::chrono::high_resolution_clock::now();
+		auto elapsed = std::chrono::duration<double, std::milli>(now - state.last_frame);
+		state.frametime = elapsed.count();
+		state.last_frame = now;
 
-	auto *data = g.imgui();
-	g.l.trace("data is null?: {}", data == nullptr);
-	g.l.trace("data valid: {}", data->Valid);
-	g.l.flush();
-	ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
+		return result;
+	}
 
-	dt.CmdEndRenderPass(commandBuffer);
-}
+	VKAPI_ATTR void VKAPI_CALL
+	Q_CmdEndRenderPass(
+		VkCommandBuffer commandBuffer
+	) {
+		state.l.trace(__func__);
 
-void VKAPI_CALL
-Q_CmdEndRenderPass2(
-	VkCommandBuffer commandBuffer,
-	const VkSubpassEndInfo *pSubpassEndInfo
-) {
-	g.l.trace("Q_CmdEndRenderPass2");
+		PFN_vkCmdEndRenderPass func;
+		{
+			std::shared_lock lock(state.global_lock);
+			func = state.device_dispatch[get_key(commandBuffer)].CmdEndRenderPass;
+		}
+		auto *data = state.imgui();
+		state.l.trace("data is null?: {}", data == nullptr);
+		state.l.trace("data valid: {}", data->Valid);
+		state.l.flush();
+		ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
 
-	std::shared_lock l(g.global_lock);
-	auto &dt = g.device_dispatch[GetKey(commandBuffer)];
-	l.unlock();
+		func(commandBuffer);
+	}
 
-	auto *data = g.imgui();
-	g.l.trace("data is null?: {}", data == nullptr);
-	g.l.trace("data valid: {}", data->Valid);
-	g.l.flush();
-	ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
+	VKAPI_ATTR void VKAPI_CALL
+	Q_CmdEndRenderPass2(
+		VkCommandBuffer commandBuffer,
+		const VkSubpassEndInfo *pSubpassEndInfo
+	) {
+		state.l.trace(__func__);
 
-	dt.CmdEndRenderPass2(commandBuffer, pSubpassEndInfo);
-}
+		PFN_vkCmdEndRenderPass2 func;
+		{
+			std::shared_lock lock(state.global_lock);
+			func = state.device_dispatch[get_key(commandBuffer)].CmdEndRenderPass2;
+		}
+		auto *data = state.imgui();
+		state.l.trace("data is null?: {}", data == nullptr);
+		state.l.trace("data valid: {}", data->Valid);
+		state.l.flush();
+		ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
 
-void VKAPI_CALL
-Q_CmdEndRenderPass2KHR(
-	VkCommandBuffer commandBuffer,
-	const VkSubpassEndInfo *pSubpassEndInfo
-) {
-	g.l.trace("Q_CmdEndRenderPass2KHR");
+		func(commandBuffer, pSubpassEndInfo);
+	}
+} // namespace
 
-	std::shared_lock l(g.global_lock);
-	auto &dt = g.device_dispatch[GetKey(commandBuffer)];
-	l.unlock();
+extern "C" EXPORT VKAPI_ATTR auto VKAPI_CALL
+Q_GetDeviceProcAddr(VkDevice device, const char *pName) -> PFN_vkVoidFunction;
 
-	auto *data = g.imgui();
-	g.l.trace("data is null?: {}", data == nullptr);
-	g.l.trace("data valid: {}", data->Valid);
-	g.l.flush();
-	ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
+extern "C" EXPORT VKAPI_ATTR auto VKAPI_CALL
+Q_GetInstanceProcAddr(VkInstance instance, const char *pName) -> PFN_vkVoidFunction;
 
-	dt.CmdEndRenderPass2KHR(commandBuffer, pSubpassEndInfo);
-}
+static const std::map<std::string_view, PFN_vkVoidFunction> device_functions{
+	{"vkGetDeviceProcAddr", reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceProcAddr)},
+	{"vkCreateDevice", reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateDevice)},
+	{"vkDestroyDevice", reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroyDevice)},
+	{"vkQueueSubmit", reinterpret_cast<PFN_vkVoidFunction>(&Q_QueueSubmit)},
+	{"vkQueuePresentKHR", reinterpret_cast<PFN_vkVoidFunction>(&Q_QueuePresentKHR)},
+	{"vkCreateSwapchainKHR", reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateSwapchain)},
+	{"vkDestroySwapchainKHR", reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroySwapchain)},
+	{"vkGetDeviceQueue", reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceQueue)},
+	{"vkGetDeviceQueue2", reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceQueue2)},
+	{"vkCreateRenderPass", reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateRenderPass)},
+	{"vkCmdEndRenderPass", reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass)},
+	{"vkCmdEndRenderPass2", reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass2)},
+	{"vkCmdEndRenderPass2KHR", reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass2)},
+};
+
+static const std::map<std::string_view, PFN_vkVoidFunction> instance_functions = {
+	{"vkGetInstanceProcAddr", reinterpret_cast<PFN_vkVoidFunction>(&Q_GetInstanceProcAddr)},
+	{"vkCreateInstance", reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateInstance)},
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+	{"vkCreateWin32SurfaceKHR", reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWin32Surface)},
+#endif
+#ifdef VK_USE_PLATFORM_WAYLAND_KHR
+	{"vkCreateWaylandSurfaceKHR", reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWaylandSurfaceKHR)},
+#endif
+};
 
 extern "C" {
-	EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
-	Q_GetDeviceProcAddr(VkDevice device, const char *pName) {
-		if (strcmp(pName, "vkGetDeviceProcAddr") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceProcAddr);
-		if (strcmp(pName, "vkCreateDevice") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateDevice);
-		if (strcmp(pName, "vkDestroyDevice") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroyDevice);
-		if (strcmp(pName, "vkQueueSubmit") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueueSubmit);
-		if (strcmp(pName, "vkQueuePresentKHR") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueuePresentKHR);
-		if (strcmp(pName, "vkCreateSwapchainKHR") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateSwapchain);
-		if (strcmp(pName, "vkDestroySwapchainKHR") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroySwapchain);
-		if (strcmp(pName, "vkGetDeviceQueue") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceQueue);
-		if (strcmp(pName, "vkGetDeviceQueue2") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceQueue2);
-		if (strcmp(pName, "vkCreateRenderPass") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateRenderPass);
-		if (strcmp(pName, "vkCmdEndRenderPass") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass);
-		if (strcmp(pName, "vkCmdEndRenderPass2") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass2);
-		if (strcmp(pName, "vkCmdEndRenderPass2KHR") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass2KHR);
+	EXPORT VKAPI_ATTR auto VKAPI_CALL
+	Q_GetDeviceProcAddr(VkDevice device, const char *pName) -> PFN_vkVoidFunction {
+		auto iter = device_functions.find(pName);
+		if (iter != device_functions.end()) {
+			return iter->second;
+		}
 		{
-			std::shared_lock l(g.global_lock);
-			return g.device_dispatch[GetKey(device)].GetDeviceProcAddr(
+			std::shared_lock lock(state.global_lock);
+			return state.device_dispatch[get_key(device)].GetDeviceProcAddr(
 				device, pName
 			);
 		}
 	}
 
-	EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
-	Q_GetInstanceProcAddr(VkInstance instance, const char *pName) {
-		if (strcmp(pName, "vkGetInstanceProcAddr") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetInstanceProcAddr);
-		if (strcmp(pName, "vkCreateInstance") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateInstance);
-		if (strcmp(pName, "vkGetDeviceProcAddr") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceProcAddr);
-		if (strcmp(pName, "vkCreateDevice") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateDevice);
-		if (strcmp(pName, "vkDestroyDevice") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroyDevice);
-		if (strcmp(pName, "vkQueueSubmit") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueueSubmit);
-		if (strcmp(pName, "vkQueuePresentKHR") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_QueuePresentKHR);
-		if (strcmp(pName, "vkDestroySwapchainKHR") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_DestroySwapchain);
-		if (strcmp(pName, "vkGetDeviceQueue") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceQueue);
-		if (strcmp(pName, "vkGetDeviceQueue2") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_GetDeviceQueue2);
-		if (strcmp(pName, "vkCreateRenderPass") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateRenderPass);
-		if (strcmp(pName, "vkCmdEndRenderPass") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass);
-		if (strcmp(pName, "vkCmdEndRenderPass2") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass2);
-		if (strcmp(pName, "vkCmdEndRenderPass2KHR") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass2KHR);
-#ifdef VK_USE_PLATFORM_WAYLAND_KHR
-		if (strcmp(pName, "vkCreateWaylandSurfaceKHR") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWaylandSurface);
-#endif
-#ifdef VK_USE_PLATFORM_WIN32_KHR
-		if (strcmp(pName, "vkCreateWin32SurfaceKHR") == 0)
-			return reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWin32Surface);
-#endif
+	EXPORT VKAPI_ATTR auto VKAPI_CALL
+	Q_GetInstanceProcAddr(VkInstance instance, const char *pName) -> PFN_vkVoidFunction {
+		auto iter = instance_functions.find(pName);
+		if (iter != instance_functions.end()) {
+			return iter->second;
+		}
+		iter = device_functions.find(pName);
+		if (iter != device_functions.end()) {
+			return iter->second;
+		}
 		{
-			std::shared_lock l(g.global_lock);
-			return g.instance_dispatch[GetKey(instance)].GetInstanceProcAddr(
+			std::shared_lock lock(state.global_lock);
+			return state.instance_dispatch[get_key(instance)].GetInstanceProcAddr(
 				instance, pName
 			);
 		}
 	}
 
-	VKAPI_ATTR VkResult VKAPI_CALL
-	vkNegotiateLoaderLayerInterfaceVersion(
-		VkNegotiateLayerInterface *pVersionStruct
-	) {
-		if (pVersionStruct->loaderLayerInterfaceVersion < 2)
+	VKAPI_ATTR auto VKAPI_CALL
+	vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface *pVersionStruct) -> VkResult {
+		if (pVersionStruct->loaderLayerInterfaceVersion < 2) {
 			return VK_ERROR_INITIALIZATION_FAILED;
-
+		}
 		pVersionStruct->loaderLayerInterfaceVersion = 2;
 		pVersionStruct->pfnGetInstanceProcAddr = Q_GetInstanceProcAddr;
 		pVersionStruct->pfnGetDeviceProcAddr = Q_GetDeviceProcAddr;
 		pVersionStruct->pfnGetPhysicalDeviceProcAddr = nullptr;
-
 		return VK_SUCCESS;
 	}
 }

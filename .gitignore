@@ -4,3 +4,7 @@
 .idea
 
 report.info
+default.profraw
+imgui.ini
+
+q_overlay.log
