@@ -362,6 +362,17 @@ namespace {
 		if (func_gsi(device, *pSwapchain, &image_count, nullptr) != VK_SUCCESS) {
 			return result;
 		}
+		std::vector<VkImage> images(image_count);
+		if (func_gsi(device, *pSwapchain, &image_count, images.data()) != VK_SUCCESS) {
+			return result;
+		}
+		state.init_swapchain_data(
+			*pSwapchain,
+			images,
+			pCreateInfo->imageFormat,
+			pCreateInfo->imageExtent.width,
+			pCreateInfo->imageExtent.height
+		);
 		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
 			info.MinImageCount = pCreateInfo->minImageCount;
 			info.ImageCount = image_count;
@@ -384,6 +395,7 @@ namespace {
 			std::shared_lock lock(state.global_lock);
 			func = state.device_dispatch[get_key(device)].DestroySwapchainKHR;
 		}
+		state.remove_swapchain_data(swapchain);
 		func(device, swapchain, pAllocator);
 	}
 

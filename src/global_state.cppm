@@ -27,12 +27,13 @@ auto get_key(DispatchableType inst) -> void * {
 	return *reinterpret_cast<void **>(inst);
 }
 
-export struct SwapchainData {
-	uint32_t h;
-	uint32_t w;
-};
-
 export class globals {
+	struct swapchain_data {
+		uint32_t width;
+		uint32_t height;
+		std::vector<vk::Image> images;
+		vk::Format image_format;
+	};
 	public:
 
 	globals() : l(init_logger()) {
@@ -44,12 +45,12 @@ export class globals {
 			ImGui_ImplVulkan_Shutdown();
 		}
 		std::shared_lock lock(sw_lock);
-		for (const auto &[swapchain, size] : swapchains) {
+		for (const auto &[swapchain, data] : _swapchain_data) {
 			l.info(
 				"Swapchain: {} w: {} h: {}",
 				reinterpret_cast<uint64_t>(static_cast<VkSwapchainKHR>(swapchain)),
-				size.h,
-				size.w
+				data.height,
+				data.width
 			);
 		}
 		l.info(count.load());
@@ -83,7 +84,6 @@ export class globals {
 	double frametime = 0;
 	std::atomic_size_t count{0};
 	std::shared_mutex sw_lock;
-	std::map<vk::SwapchainKHR, SwapchainData> swapchains;
 	std::map<void *, VkuInstanceDispatchTable> instance_dispatch;
 	std::map<void *, VkuDeviceDispatchTable> device_dispatch;
 	std::shared_mutex global_lock;
@@ -141,8 +141,8 @@ export class globals {
 		attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
 		VkAttachmentReference color_ref{
-			.attachment=0,
-			.layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+			.attachment = 0,
+			.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
 		};
 
 		VkSubpassDescription subpass{};
@@ -241,4 +241,21 @@ export class globals {
 			l.flush();
 		}
 	}
+	void init_swapchain_data(VkSwapchainKHR sw, std::span<VkImage> data, VkFormat image_format, uint32_t height, uint32_t width) {
+		_swapchain_data.emplace(
+			sw,
+			swapchain_data{
+				.width = width,
+				.height = height,
+				.images = std::vector<vk::Image>(data.begin(), data.end()),
+				.image_format = vk::Format{image_format},
+			}
+		);
+	}
+	void remove_swapchain_data(VkSwapchainKHR sw) {
+		_swapchain_data.erase(sw);
+	}
+	private:
+
+	std::map<vk::SwapchainKHR, swapchain_data> _swapchain_data;
 };
