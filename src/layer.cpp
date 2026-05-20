@@ -48,9 +48,6 @@ namespace {
 			api_version,
 			[](const char *name, void *user_data) -> PFN_vkVoidFunction {
 				state.l.trace(name);
-				// if (name == "vkCmdBeginRendering" || name == "vkCmdEndRendering" || name == "vkCmdBeginRenderingKHR" || name == "vkCmdEndRenderingKHR") {
-				// 	return nullptr;
-				// }
 
 				auto *data = reinterpret_cast<loader_data *>(user_data);
 				PFN_vkGetDeviceProcAddr device_func;
@@ -64,6 +61,13 @@ namespace {
 				if (device_addr) {
 					state.l.trace("device");
 					return device_addr;
+				}
+				auto name_view = std::string_view{name};
+				if (name_view.starts_with("vkCmdBeginRendering")
+					|| name_view.starts_with("vkCmdEndRendering")
+					|| name_view.starts_with("vkCmdBeginRenderingKHR")
+					|| name_view.starts_with("vkCmdEndRenderingKHR")) {
+					return nullptr;
 				}
 				auto instance_addr = instance_func(data->instance, name);
 				if (instance_addr) {
@@ -243,7 +247,7 @@ namespace {
 		const VkAllocationCallbacks *pAllocator,
 		VkSurfaceKHR *pSurface
 	) -> VkResult {
-		g.l.debug(__func__);
+		state.l.debug(__func__);
 
 		PFN_vkCreateWaylandSurfaceKHR func;
 		{
@@ -406,6 +410,8 @@ namespace {
 	) {
 		state.l.trace(__func__);
 
+		state.shutdown_imgui();
+
 		PFN_vkDestroyDevice func;
 		{
 			std::unique_lock lock(state.global_lock);
@@ -465,12 +471,10 @@ namespace {
 			std::shared_lock lock(state.global_lock);
 			func = state.device_dispatch[get_key(commandBuffer)].CmdEndRenderPass;
 		}
-		auto *data = state.imgui();
-		state.l.trace("data is null?: {}", data == nullptr);
-		state.l.trace("data valid: {}", data->Valid);
-		state.l.flush();
-		ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
-
+		// auto *data = state.imgui();
+		// if (data != nullptr) {
+		// 	ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
+		// }
 		func(commandBuffer);
 	}
 
@@ -487,11 +491,9 @@ namespace {
 			func = state.device_dispatch[get_key(commandBuffer)].CmdEndRenderPass2;
 		}
 		auto *data = state.imgui();
-		state.l.trace("data is null?: {}", data == nullptr);
-		state.l.trace("data valid: {}", data->Valid);
-		state.l.flush();
-		ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
-
+		// if (data != nullptr) {
+		// 	ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
+		// }
 		func(commandBuffer, pSubpassEndInfo);
 	}
 } // namespace
@@ -525,7 +527,7 @@ static const std::map<std::string_view, PFN_vkVoidFunction> instance_functions =
 	{"vkCreateWin32SurfaceKHR", reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWin32Surface)},
 #endif
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
-	{"vkCreateWaylandSurfaceKHR", reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWaylandSurfaceKHR)},
+	{"vkCreateWaylandSurfaceKHR", reinterpret_cast<PFN_vkVoidFunction>(&Q_CreateWaylandSurface)},
 #endif
 };
 

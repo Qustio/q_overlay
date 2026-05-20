@@ -41,9 +41,8 @@ export class globals {
 	}
 
 	~globals() {
-		if (imgui_initialized) {
-			ImGui_ImplVulkan_Shutdown();
-		}
+		l.trace(__func__);
+
 		std::shared_lock lock(sw_lock);
 		for (const auto &[swapchain, data] : _swapchain_data) {
 			l.info(
@@ -65,7 +64,18 @@ export class globals {
 	};
 	std::atomic_bool imgui_rendered{false};
 	bool imgui_initialized{false};
+	auto shutdown_imgui() -> void {
+		if (imgui_initialized) {
+			ImGui_ImplVulkan_Shutdown();
+			imgui_initialized = false;
+			imgui_rendered.store(false);
+		}
+	}
+
 	auto imgui() const -> ImDrawData * {
+		if (!imgui_initialized) {
+			return nullptr;
+		}
 		ImGui_ImplVulkan_NewFrame();
 		ImGui::NewFrame();
 
@@ -239,6 +249,9 @@ export class globals {
 			auto res = ImGui_ImplVulkan_Init(&init_info);
 			l.info("Imgui init result: {}", res);
 			l.flush();
+			if (res) {
+				imgui_initialized = true;
+			}
 		}
 	}
 	void init_swapchain_data(VkSwapchainKHR sw, std::span<VkImage> data, VkFormat image_format, uint32_t height, uint32_t width) {
@@ -248,7 +261,7 @@ export class globals {
 				.width = width,
 				.height = height,
 				.images = std::vector<vk::Image>(data.begin(), data.end()),
-				.image_format = vk::Format{image_format},
+				.image_format = vk::Format(image_format),
 			}
 		);
 	}
