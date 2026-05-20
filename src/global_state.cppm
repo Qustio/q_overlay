@@ -40,7 +40,9 @@ export class globals {
 	}
 
 	~globals() {
-		ImGui_ImplVulkan_Shutdown();
+		if (imgui_initialized) {
+			ImGui_ImplVulkan_Shutdown();
+		}
 		std::shared_lock lock(sw_lock);
 		for (const auto &[swapchain, size] : swapchains) {
 			l.info(
@@ -61,6 +63,7 @@ export class globals {
 		&ImGui::DestroyContext
 	};
 	std::atomic_bool imgui_rendered{false};
+	bool imgui_initialized{false};
 	auto imgui() const -> ImDrawData * {
 		ImGui_ImplVulkan_NewFrame();
 		ImGui::NewFrame();
