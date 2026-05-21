@@ -187,9 +187,14 @@ namespace {
 		}
 
 		{
-			std::shared_lock lock(state.global_lock);
-			auto& dld = state.instance_dispatch[get_key(physicalDevice)];
+			std::unique_lock lock(state.global_lock);
+			// copy dld
+			auto dld = state.instance_dispatch[get_key(physicalDevice)];
+			// set gdpa and init because it ignores PFN_vkGetDeviceProcAddr on init() with 4 params?
+			dld.vkGetDeviceProcAddr = gdpa;
 			dld.init(vk::Device(*pDevice));
+			// save dld to device_dispatch map
+			state.device_dispatch[get_key(*pDevice)] = dld;
 		}
 
 		// store the table by key
@@ -358,7 +363,7 @@ namespace {
 		state.init_swapchain_data(
 			device,
 			*pSwapchain,
-			vk::Format{pCreateInfo->imageFormat},
+			vk::Format(pCreateInfo->imageFormat),
 			pCreateInfo->imageExtent
 		);
 		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
