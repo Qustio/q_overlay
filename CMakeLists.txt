@@ -53,6 +53,7 @@ target_include_directories(q_overlay PRIVATE
 )
 target_compile_definitions(q_overlay PRIVATE
 	VK_NO_PROTOTYPES
+	VULKAN_HPP_NO_EXCEPTIONS
 	IMGUI_IMPL_VULKAN_NO_PROTOTYPES
 	IMGUI_USER_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/src/imconfig.h"
 )

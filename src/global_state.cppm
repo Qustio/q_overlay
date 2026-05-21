@@ -23,15 +23,20 @@ export module global_state;
 
 // use the loader's dispatch table pointer as a key for dispatch map lookups
 export template <typename DispatchableType>
-auto get_key(DispatchableType inst) -> void * {
-	return *reinterpret_cast<void **>(inst);
+auto get_key(const DispatchableType &inst) -> void * {
+	if constexpr (requires { typename DispatchableType::NativeType; }) {
+		auto ctype = static_cast<typename DispatchableType::NativeType>(inst);
+		return *reinterpret_cast<void **>(ctype);
+	} else {
+		return *reinterpret_cast<void **>(inst);
+	}
 }
 
 export class globals {
 	struct swapchain_data {
-		uint32_t width;
-		uint32_t height;
+		vk::Extent2D extent;
 		std::vector<vk::Image> images;
+		std::vector<vk::ImageView> image_views;
 		vk::Format image_format;
 	};
 	public:
@@ -48,8 +53,8 @@ export class globals {
 			l.info(
 				"Swapchain: {} w: {} h: {}",
 				reinterpret_cast<uint64_t>(static_cast<VkSwapchainKHR>(swapchain)),
-				data.height,
-				data.width
+				data.extent.width,
+				data.extent.height
 			);
 		}
 		l.info(count.load());
@@ -88,14 +93,13 @@ export class globals {
 		return ImGui::GetDrawData();
 	}
 
-	VkInstance instance;
-
 	spdlog::logger l;
 	double frametime = 0;
 	std::atomic_size_t count{0};
 	std::shared_mutex sw_lock;
-	std::map<void *, VkuInstanceDispatchTable> instance_dispatch;
-	std::map<void *, VkuDeviceDispatchTable> device_dispatch;
+	std::map<void *, vk::Instance> instance_map;
+	std::map<void *, vk::detail::DispatchLoaderDynamic> instance_dispatch;
+	std::map<void *, vk::detail::DispatchLoaderDynamic> device_dispatch;
 	std::shared_mutex global_lock;
 	std::chrono::time_point<std::chrono::high_resolution_clock> last_frame = std::chrono::high_resolution_clock::now();
 
@@ -104,86 +108,6 @@ export class globals {
 
 	vk::DescriptorPool descriptor_pool;
 	vk::RenderPass render_pass;
-	void create_descriptor_pool(VkDevice device) {
-		update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-			info.DescriptorPoolSize = IMGUI_IMPL_VULKAN_MINIMUM_SAMPLED_IMAGE_POOL_SIZE;
-		});
-		return;
-		std::array<vk::DescriptorPoolSize, 2> pool_sizes{{{vk::DescriptorType::eSampledImage, IMGUI_IMPL_VULKAN_MINIMUM_SAMPLED_IMAGE_POOL_SIZE}, {vk::DescriptorType::eSampler, IMGUI_IMPL_VULKAN_MINIMUM_SAMPLER_POOL_SIZE}}};
-		vk::DescriptorPoolCreateInfo pool_info{
-			vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-			0,
-			pool_sizes
-		};
-		for (VkDescriptorPoolSize &pool_size : pool_sizes) {
-			pool_info.maxSets += pool_size.descriptorCount;
-		}
-
-		PFN_vkCreateDescriptorPool func;
-		{
-			std::shared_lock lock(global_lock);
-			func = device_dispatch[get_key(device)].CreateDescriptorPool;
-		}
-
-		VkDescriptorPool pool;
-		auto result = func(
-			device,
-			reinterpret_cast<const VkDescriptorPoolCreateInfo *>(&pool_info),
-			nullptr,
-			&pool
-		);
-		if (result != VK_SUCCESS) {
-			l.error("Cannot create vk::DescriptorPool");
-		}
-		descriptor_pool = pool;
-		update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-			info.DescriptorPool = pool;
-		});
-		l.info("Created vk::DescriptorPool");
-	}
-	void create_render_pass(VkDevice device, VkFormat format) {
-		VkAttachmentDescription attachment{};
-		attachment.format = format;
-		attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-		attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // don't clear, we're overlaying
-		attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		attachment.initialLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-		attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-		VkAttachmentReference color_ref{
-			.attachment = 0,
-			.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-		};
-
-		VkSubpassDescription subpass{};
-		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpass.colorAttachmentCount = 1;
-		subpass.pColorAttachments = &color_ref;
-
-		VkRenderPassCreateInfo rp_info{};
-		rp_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-		rp_info.attachmentCount = 1;
-		rp_info.pAttachments = &attachment;
-		rp_info.subpassCount = 1;
-		rp_info.pSubpasses = &subpass;
-
-		VkRenderPass rpass;
-		PFN_vkCreateRenderPass func;
-		{
-			std::shared_lock lock(global_lock);
-			func = device_dispatch[get_key(device)].CreateRenderPass;
-		}
-
-		auto result = func(device, &rp_info, nullptr, &rpass); // imgui's loaded fn
-		l.info("Created RenderPass: {}", result == VK_SUCCESS);
-
-		update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-			info.PipelineInfoMain.RenderPass = rpass;
-			info.PipelineInfoMain.Subpass = 0;
-		});
-
-		render_pass = rpass;
-	}
 	static auto init_logger() -> spdlog::logger {
 		auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
 			"q_overlay.log", true
@@ -254,14 +178,41 @@ export class globals {
 			}
 		}
 	}
-	void init_swapchain_data(VkSwapchainKHR sw, std::span<VkImage> data, VkFormat image_format, uint32_t height, uint32_t width) {
+	void init_swapchain_data(vk::Device device, vk::SwapchainKHR sw, vk::Format format, vk::Extent2D extent) {
+		std::shared_lock lock(global_lock);
+		const auto &dld = device_dispatch[get_key(device)];
+		auto [result, images] = device.getSwapchainImagesKHR(sw, dld);
+		if (result != vk::Result::eSuccess) {
+			l.error("Can't get swapchain images");
+			return;
+		}
+		vk::ImageViewCreateInfo info{};
+		info.viewType = vk::ImageViewType::e2D;
+		info.format = format;
+		info.subresourceRange = {
+			vk::ImageAspectFlagBits::eColor,
+			0,
+			1, // mip
+			0,
+			1 // array
+		};
+		std::vector<vk::ImageView> image_views(images.size());
+		for (const auto &image : images) {
+			info.image = image;
+			auto [result, image_view] = device.createImageView(info, nullptr, dld);
+			if (result != vk::Result::eSuccess) {
+				l.error("Can't create image view");
+				return;
+			}
+			image_views.push_back(image_view);
+		}
 		_swapchain_data.emplace(
 			sw,
 			swapchain_data{
-				.width = width,
-				.height = height,
-				.images = std::vector<vk::Image>(data.begin(), data.end()),
-				.image_format = vk::Format(image_format),
+				.extent = extent,
+				.images = std::move(images),
+				.image_views = std::move(image_views),
+				.image_format = format,
 			}
 		);
 	}
