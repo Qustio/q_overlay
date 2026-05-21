@@ -7,13 +7,10 @@
 #include <ratio>
 #include <shared_mutex>
 #include <spdlog/fmt/fmt.h>
-#include <vulkan/utility/vk_dispatch_table.h>
 #include <vulkan/vk_layer.h>
-#include <vulkan/vulkan.h>
-#include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_core.h>
 
 import global_state;
+import vulkan;
 
 #undef EXPORT
 #ifdef _WIN32

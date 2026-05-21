@@ -13,13 +13,11 @@ module;
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
-#include <vulkan/utility/vk_dispatch_table.h>
 #include <vulkan/vk_layer.h>
-#include <vulkan/vulkan.h>
-#include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_core.h>
 
 export module global_state;
+
+import vulkan;
 
 // use the loader's dispatch table pointer as a key for dispatch map lookups
 export template <typename DispatchableType>
