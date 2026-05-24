@@ -17,8 +17,8 @@ module;
 #include <vulkan/vk_layer.h>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_raii.hpp>
 #include <vulkan/vulkan_core.h>
+#include <vulkan/vulkan_raii.hpp>
 
 export module global_state;
 
@@ -33,6 +33,29 @@ auto get_key(const DispatchableType &inst) -> void * {
 	}
 }
 
+export template <typename T>
+void modify(
+	std::atomic<std::shared_ptr<const T>> &value,
+	std::type_identity_t<std::function<void(T &)>> fn
+) {
+	std::shared_ptr<const T> current = value.load();
+	while (true) {
+		// copy
+		std::shared_ptr<T> next = std::make_shared<T>(*current);
+		// modify
+		fn(*next);
+		// store
+		std::shared_ptr<const T> expected = current;
+		if (value.compare_exchange_weak(expected, std::move(next))) {
+			break;
+		}
+
+		current = expected;
+	}
+}
+
+using fn_map = std::map<void *, vk::detail::DispatchLoaderDynamic>;
+
 export class globals {
 	struct swapchain_data {
 		vk::Extent2D extent;
@@ -40,6 +63,7 @@ export class globals {
 		std::vector<vk::UniqueImageView> image_views;
 		vk::Format image_format;
 	};
+	using SwapchainMap = std::map<vk::SwapchainKHR, std::shared_ptr<const swapchain_data>>;
 	public:
 
 	globals() : l(init_logger()) {
@@ -49,13 +73,13 @@ export class globals {
 	~globals() {
 		l.trace(__func__);
 
-		std::shared_lock lock(sw_lock);
-		for (const auto &[swapchain, data] : _swapchain_data) {
+		auto sw_data = _swapchain_data.load();
+		for (const auto &[swapchain, data] : *sw_data) {
 			l.info(
 				"Swapchain: {} w: {} h: {}",
 				reinterpret_cast<uint64_t>(static_cast<VkSwapchainKHR>(swapchain)),
-				data.extent.width,
-				data.extent.height
+				data->extent.width,
+				data->extent.height
 			);
 		}
 		l.info(count.load());
@@ -188,8 +212,9 @@ export class globals {
 			l.error("Can't get swapchain images: {}", vk::to_string(images.error()));
 			return;
 		}
+		auto images_value = std::move(*images);
 		vk::ImageViewCreateInfo info{};
-		info.viewType = vk::ImageViewType::e3D;
+		info.viewType = vk::ImageViewType::e2D;
 		info.format = format;
 		info.subresourceRange = {
 			vk::ImageAspectFlagBits::eColor,
@@ -199,8 +224,8 @@ export class globals {
 			1 // array
 		};
 		std::vector<vk::UniqueImageView> image_views{};
-		image_views.reserve(images.value().size());
-		for (const auto &image : images.value()) {
+		image_views.reserve(images_value.size());
+		for (const auto &image : images_value) {
 			info.image = image;
 			auto image_view = device.createImageViewUnique(info, nullptr, dld);
 			if (!image_view) {
@@ -209,21 +234,26 @@ export class globals {
 			}
 			image_views.push_back(std::move(image_view.value()));
 		}
-		_swapchain_data.emplace(
-			sw,
-			swapchain_data{
+		auto sw_data = _swapchain_data.load();
+		modify(_swapchain_data, [&](SwapchainMap &sw_data) -> void {
+			auto entry = std::make_shared<const swapchain_data>(swapchain_data{
 				.extent = extent,
-				.images = std::move(images.value()),
+				.images = std::move(images_value),
 				.image_views = std::move(image_views),
 				.image_format = format,
-			}
-		);
+			});
+			sw_data.emplace(
+				sw, entry
+			);
+		});
 		l.debug("fine");
 	}
 	void remove_swapchain_data(VkSwapchainKHR sw) {
-		_swapchain_data.erase(sw);
+		modify(_swapchain_data, [&](SwapchainMap &sw_data) -> void {
+			sw_data.erase(sw);
+		});
 	}
 	private:
 
-	std::map<vk::SwapchainKHR, swapchain_data> _swapchain_data;
+	std::atomic<std::shared_ptr<const SwapchainMap>> _swapchain_data{std::make_shared<const SwapchainMap>()};
 };

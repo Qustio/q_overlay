@@ -26,8 +26,8 @@ namespace {
 	globals state;
 	// https://github.com/ocornut/imgui/issues/4854#issuecomment-1783950012
 	void init_imgui_vulkan(
-		VkInstance instance,
-		VkDevice device,
+		vk::Instance instance,
+		vk::Device device,
 		uint32_t api_version
 	) {
 		state.l.info(
@@ -37,10 +37,10 @@ namespace {
 			VK_API_VERSION_PATCH(api_version)
 		);
 		struct loader_data {
-			VkInstance instance;
-			VkDevice device;
+			vk::Instance instance;
+			vk::Device device;
 		};
-		static loader_data loaders{
+		loader_data loaders{
 			.instance = instance,
 			.device = device
 		};
@@ -186,23 +186,21 @@ namespace {
 			return result;
 		}
 
+		vk::Instance instance;
+		vk::Device device{*pDevice};
 		{
 			std::unique_lock lock(state.global_lock);
 			// copy dld
 			auto dld = state.instance_dispatch[get_key(physicalDevice)];
 			// set gdpa and init because it ignores PFN_vkGetDeviceProcAddr on init() with 4 params?
 			dld.vkGetDeviceProcAddr = gdpa;
-			dld.init(vk::Device(*pDevice));
+			dld.init(device);
 			// save dld to device_dispatch map
-			state.device_dispatch[get_key(*pDevice)] = dld;
+			state.device_dispatch[get_key(device)] = dld;
+
+			instance = state.instance_map[get_key(physicalDevice)];
 		}
 
-		// store the table by key
-		// {
-		// 	std::unique_lock lock(state.global_lock);
-		// 	state.device_dispatch[get_key(*pDevice)] = dispatchTable;
-		// }
-		//
 		uint32_t api;
 		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
 			api = info.ApiVersion;
@@ -211,7 +209,7 @@ namespace {
 			state.l.info("PhysicalDevice");
 			state.l.info("Device");
 		});
-		//init_imgui_vulkan(instance, *pDevice, api);
+		init_imgui_vulkan(instance, device, api);
 
 		return VK_SUCCESS;
 	}
