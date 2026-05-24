@@ -17,6 +17,7 @@ module;
 #include <vulkan/vk_layer.h>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_raii.hpp>
 #include <vulkan/vulkan_core.h>
 
 export module global_state;
@@ -36,7 +37,7 @@ export class globals {
 	struct swapchain_data {
 		vk::Extent2D extent;
 		std::vector<vk::Image> images;
-		std::vector<vk::ImageView> image_views;
+		std::vector<vk::UniqueImageView> image_views;
 		vk::Format image_format;
 	};
 	public:
@@ -196,15 +197,16 @@ export class globals {
 			0,
 			1 // array
 		};
-		std::vector<vk::ImageView> image_views(images.size());
+		std::vector<vk::UniqueImageView> image_views{};
+		image_views.reserve(images.size());
 		for (const auto &image : images) {
 			info.image = image;
-			auto [result, image_view] = device.createImageView(info, nullptr, dld);
+			auto [result, image_view] = device.createImageViewUnique(info, nullptr);
 			if (result != vk::Result::eSuccess) {
 				l.error("Can't create image view");
 				return;
 			}
-			image_views.push_back(image_view);
+			image_views.push_back(std::move(image_view));
 		}
 		_swapchain_data.emplace(
 			sw,
