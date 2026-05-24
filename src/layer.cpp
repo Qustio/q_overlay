@@ -342,14 +342,12 @@ namespace {
 	) -> VkResult {
 		state.l.debug(__func__);
 
-		PFN_vkCreateSwapchainKHR func_cs;
-		PFN_vkGetSwapchainImagesKHR func_gsi;
+		PFN_vkCreateSwapchainKHR func;
 		{
 			std::shared_lock lock(state.global_lock);
-			func_cs = state.device_dispatch[get_key(device)].vkCreateSwapchainKHR;
-			func_gsi = state.device_dispatch[get_key(device)].vkGetSwapchainImagesKHR;
+			func = state.device_dispatch[get_key(device)].vkCreateSwapchainKHR;
 		}
-		auto result = func_cs(device, pCreateInfo, pAllocator, pSwapchain);
+		auto result = func(device, pCreateInfo, pAllocator, pSwapchain);
 		ImGui::GetIO().DisplaySize = ImVec2(
 			static_cast<float>(pCreateInfo->imageExtent.width),
 			static_cast<float>(pCreateInfo->imageExtent.height)

@@ -180,15 +180,16 @@ export class globals {
 		}
 	}
 	void init_swapchain_data(vk::Device device, vk::SwapchainKHR sw, vk::Format format, vk::Extent2D extent) {
+		l.debug(__func__);
 		std::shared_lock lock(global_lock);
 		const auto &dld = device_dispatch[get_key(device)];
-		auto [result, images] = device.getSwapchainImagesKHR(sw, dld);
-		if (result != vk::Result::eSuccess) {
-			l.error("Can't get swapchain images");
+		auto images = device.getSwapchainImagesKHR(sw, dld);
+		if (!images) {
+			l.error("Can't get swapchain images: {}", vk::to_string(images.error()));
 			return;
 		}
 		vk::ImageViewCreateInfo info{};
-		info.viewType = vk::ImageViewType::e2D;
+		info.viewType = vk::ImageViewType::e3D;
 		info.format = format;
 		info.subresourceRange = {
 			vk::ImageAspectFlagBits::eColor,
@@ -198,25 +199,26 @@ export class globals {
 			1 // array
 		};
 		std::vector<vk::UniqueImageView> image_views{};
-		image_views.reserve(images.size());
-		for (const auto &image : images) {
+		image_views.reserve(images.value().size());
+		for (const auto &image : images.value()) {
 			info.image = image;
-			auto [result, image_view] = device.createImageViewUnique(info, nullptr);
-			if (result != vk::Result::eSuccess) {
-				l.error("Can't create image view");
+			auto image_view = device.createImageViewUnique(info, nullptr, dld);
+			if (!image_view) {
+				l.error("Can't create image view: {}", vk::to_string(image_view.error()));
 				return;
 			}
-			image_views.push_back(std::move(image_view));
+			image_views.push_back(std::move(image_view.value()));
 		}
 		_swapchain_data.emplace(
 			sw,
 			swapchain_data{
 				.extent = extent,
-				.images = std::move(images),
+				.images = std::move(images.value()),
 				.image_views = std::move(image_views),
 				.image_format = format,
 			}
 		);
+		l.debug("fine");
 	}
 	void remove_swapchain_data(VkSwapchainKHR sw) {
 		_swapchain_data.erase(sw);
