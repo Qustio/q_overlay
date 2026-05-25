@@ -50,13 +50,8 @@ namespace {
 				state.l.trace(name);
 
 				auto *data = reinterpret_cast<loader_data *>(user_data);
-				PFN_vkGetDeviceProcAddr device_func;
-				PFN_vkGetInstanceProcAddr instance_func;
-				{
-					std::shared_lock lock(state.global_lock);
-					device_func = state.device_dispatch[get_key(data->device)].vkGetDeviceProcAddr;
-					instance_func = state.instance_dispatch[get_key(data->instance)].vkGetInstanceProcAddr;
-				}
+				PFN_vkGetDeviceProcAddr device_func = state.device_dispatch.read()->at(data->device).vkGetDeviceProcAddr;
+				PFN_vkGetInstanceProcAddr instance_func = state.instance_dispatch.read()->at(data->instance).vkGetInstanceProcAddr;
 				auto device_addr = device_func(data->device, name);
 				if (device_addr) {
 					state.l.trace("device");
@@ -126,16 +121,18 @@ namespace {
 
 		vk::detail::DispatchLoaderDynamic dispatchTable{*pInstance, gipa};
 
-		{
-			std::unique_lock lock(state.global_lock);
-			state.instance_dispatch[get_key(*pInstance)] = dispatchTable;
-			state.instance_map[get_key(*pInstance)] = vk::Instance{*pInstance};
-		}
+		vk::Instance instance{*pInstance};
+		// state.instance_dispatch.mutate([&](auto &i_dld) {
+		// 	i_dld[get_key(instance)] = dispatchTable;
+		// });
+		// state.instance_map.mutate([&](auto &i_map) {
+		// 	i_map[get_key(instance)] = instance;
+		// });
 
-		state.update_imgui_init_info([&](auto &info) -> void {
-			info.Instance = *pInstance;
-			info.ApiVersion = pCreateInfo->pApplicationInfo->apiVersion;
-		});
+		// state.update_imgui_init_info([&](auto &info) -> void {
+		// 	info.Instance = *pInstance;
+		// 	info.ApiVersion = pCreateInfo->pApplicationInfo->apiVersion;
+		// });
 
 		return VK_SUCCESS;
 	}
@@ -186,20 +183,14 @@ namespace {
 			return result;
 		}
 
-		vk::Instance instance;
+		vk::Instance instance = state.instance_map.read()->at(get_key(physicalDevice));
 		vk::Device device{*pDevice};
-		{
-			std::unique_lock lock(state.global_lock);
-			// copy dld
-			auto dld = state.instance_dispatch[get_key(physicalDevice)];
-			// set gdpa and init because it ignores PFN_vkGetDeviceProcAddr on init() with 4 params?
-			dld.vkGetDeviceProcAddr = gdpa;
-			dld.init(device);
-			// save dld to device_dispatch map
-			state.device_dispatch[get_key(device)] = dld;
-
-			instance = state.instance_map[get_key(physicalDevice)];
-		}
+		vk::detail::DispatchLoaderDynamic copy_dld = state.instance_dispatch.read()->at(get_key(physicalDevice));
+		copy_dld.vkGetDeviceProcAddr = gdpa;
+		copy_dld.init(device);
+		state.device_dispatch.mutate([&](auto d_dld) {
+			d_dld[get_key(device)] = copy_dld;
+		});
 
 		uint32_t api;
 		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
@@ -224,12 +215,8 @@ namespace {
 	) -> VkResult {
 		state.l.trace(__func__);
 
-		PFN_vkCreateWin32SurfaceKHR func;
-		{
-			std::shared_lock lock(state.global_lock);
-			auto& aboba = state.instance_dispatch[get_key(instance)];
-			func = aboba.vkCreateWin32SurfaceKHR;
-		}
+		PFN_vkCreateWin32SurfaceKHR func = state.instance_dispatch.read()->at(get_key(instance)).vkCreateWin32SurfaceKHR;
+
 		return func(instance, pCreateInfo, pAllocator, pSurface);
 	}
 
@@ -245,11 +232,8 @@ namespace {
 	) -> VkResult {
 		state.l.debug(__func__);
 
-		PFN_vkCreateWaylandSurfaceKHR func;
-		{
-			std::shared_lock lock(state.global_lock);
-			func = state.instance_dispatch[get_key(instance)].vkCreateWaylandSurfaceKHR;
-		}
+		PFN_vkCreateWaylandSurfaceKHR func = state.instance_dispatch.read()->at(get_key(instance)).vkCreateWaylandSurfaceKHR;
+
 		return func(instance, pCreateInfo, pAllocator, pSurface);
 	}
 #endif
@@ -263,11 +247,8 @@ namespace {
 	) {
 		state.l.debug(__func__);
 
-		PFN_vkGetDeviceQueue func;
-		{
-			std::shared_lock lock(state.global_lock);
-			func = state.device_dispatch[get_key(device)].vkGetDeviceQueue;
-		}
+		PFN_vkGetDeviceQueue func = state.device_dispatch.read()->at(get_key(device)).vkGetDeviceQueue;
+
 		func(device, queueFamilyIndex, queueIndex, pQueue);
 		state.l.debug("Family: {} Queue: {}", queueFamilyIndex, queueIndex);
 		if (queueFamilyIndex != 0 || queueIndex != 0) {
@@ -289,11 +270,8 @@ namespace {
 	) {
 		state.l.debug(__func__);
 
-		PFN_vkGetDeviceQueue2 func;
-		{
-			std::shared_lock lock(state.global_lock);
-			func = state.device_dispatch[get_key(device)].vkGetDeviceQueue2;
-		}
+		PFN_vkGetDeviceQueue2 func = state.device_dispatch.read()->at(get_key(device)).vkGetDeviceQueue2;
+
 		func(device, pQueueInfo, pQueue);
 		state.l.debug("Family: {} Queue: {}", pQueueInfo->queueFamilyIndex, pQueueInfo->queueIndex);
 		if (pQueueInfo->queueFamilyIndex != 0 || pQueueInfo->queueIndex != 0) {
@@ -316,11 +294,8 @@ namespace {
 	) -> VkResult {
 		state.l.debug(__func__);
 
-		PFN_vkCreateRenderPass func;
-		{
-			std::shared_lock lock(state.global_lock);
-			func = state.device_dispatch[get_key(device)].vkCreateRenderPass;
-		}
+		PFN_vkCreateRenderPass func = state.device_dispatch.read()->at(get_key(device)).vkCreateRenderPass;
+
 		auto result = func(device, pCreateInfo, pAllocator, pRenderPass);
 		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
 			info.PipelineInfoMain.RenderPass = *pRenderPass;
@@ -340,11 +315,8 @@ namespace {
 	) -> VkResult {
 		state.l.debug(__func__);
 
-		PFN_vkCreateSwapchainKHR func;
-		{
-			std::shared_lock lock(state.global_lock);
-			func = state.device_dispatch[get_key(device)].vkCreateSwapchainKHR;
-		}
+		PFN_vkCreateSwapchainKHR func = state.device_dispatch.read()->at(get_key(device)).vkCreateSwapchainKHR;
+
 		auto result = func(device, pCreateInfo, pAllocator, pSwapchain);
 		ImGui::GetIO().DisplaySize = ImVec2(
 			static_cast<float>(pCreateInfo->imageExtent.width),
@@ -377,11 +349,8 @@ namespace {
 	) {
 		state.l.debug(__func__);
 
-		PFN_vkDestroySwapchainKHR func;
-		{
-			std::shared_lock lock(state.global_lock);
-			func = state.device_dispatch[get_key(device)].vkDestroySwapchainKHR;
-		}
+		PFN_vkDestroySwapchainKHR func = state.device_dispatch.read()->at(get_key(device)).vkDestroySwapchainKHR;
+
 		state.remove_swapchain_data(swapchain);
 		func(device, swapchain, pAllocator);
 	}
@@ -395,12 +364,11 @@ namespace {
 
 		state.shutdown_imgui();
 
-		PFN_vkDestroyDevice func;
-		{
-			std::unique_lock lock(state.global_lock);
-			func = state.device_dispatch[get_key(device)].vkDestroyDevice;
-			state.device_dispatch.erase(get_key(device));
-		}
+		PFN_vkDestroyDevice func = state.device_dispatch.read()->at(get_key(device)).vkDestroyDevice;
+
+		state.device_dispatch.mutate([&](auto d_dld) {
+			d_dld.erase(get_key(device));
+		});
 		func(device, pAllocator);
 	}
 
@@ -413,11 +381,8 @@ namespace {
 	) -> VkResult {
 		state.l.trace(__func__);
 
-		PFN_vkQueueSubmit func;
-		{
-			std::shared_lock lock(state.global_lock);
-			func = state.device_dispatch[get_key(queue)].vkQueueSubmit;
-		}
+		PFN_vkQueueSubmit func = state.device_dispatch.read()->at(get_key(queue)).vkQueueSubmit;
+
 		return func(queue, submitCount, pSubmits, fence);
 	}
 
@@ -428,11 +393,7 @@ namespace {
 	) -> VkResult {
 		state.l.trace(__func__);
 
-		PFN_vkQueuePresentKHR func;
-		{
-			std::shared_lock lock(state.global_lock);
-			func = state.device_dispatch[get_key(queue)].vkQueuePresentKHR;
-		}
+		PFN_vkQueuePresentKHR func = state.device_dispatch.read()->at(get_key(queue)).vkQueuePresentKHR;
 
 		auto result = func(queue, pPresentInfo);
 		auto now = std::chrono::high_resolution_clock::now();
@@ -449,11 +410,8 @@ namespace {
 	) {
 		state.l.trace(__func__);
 
-		PFN_vkCmdEndRenderPass func;
-		{
-			std::shared_lock lock(state.global_lock);
-			func = state.device_dispatch[get_key(commandBuffer)].vkCmdEndRenderPass;
-		}
+		PFN_vkCmdEndRenderPass func = state.device_dispatch.read()->at(get_key(commandBuffer)).vkCmdEndRenderPass;
+
 		// auto *data = state.imgui();
 		// if (data != nullptr) {
 		// 	ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
@@ -468,12 +426,9 @@ namespace {
 	) {
 		state.l.trace(__func__);
 
-		PFN_vkCmdEndRenderPass2 func;
-		{
-			std::shared_lock lock(state.global_lock);
-			func = state.device_dispatch[get_key(commandBuffer)].vkCmdEndRenderPass2;
-		}
-		auto *data = state.imgui();
+		PFN_vkCmdEndRenderPass2 func = state.device_dispatch.read()->at(get_key(commandBuffer)).vkCmdEndRenderPass2;
+
+		// auto *data = state.imgui();
 		// if (data != nullptr) {
 		// 	ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
 		// }
@@ -517,20 +472,23 @@ static const std::map<std::string_view, PFN_vkVoidFunction> instance_functions =
 extern "C" {
 	EXPORT VKAPI_ATTR auto VKAPI_CALL
 	Q_GetDeviceProcAddr(VkDevice device, const char *pName) -> PFN_vkVoidFunction {
+		state.l.trace(__func__);
+		state.l.trace(pName);
+
 		auto iter = device_functions.find(pName);
 		if (iter != device_functions.end()) {
 			return iter->second;
 		}
 		{
-			std::shared_lock lock(state.global_lock);
-			return state.device_dispatch[get_key(device)].vkGetDeviceProcAddr(
-				device, pName
-			);
+			PFN_vkGetDeviceProcAddr func = state.device_dispatch.read()->at(get_key(device)).vkGetDeviceProcAddr;
+			return func(device, pName);
 		}
 	}
 
 	EXPORT VKAPI_ATTR auto VKAPI_CALL
 	Q_GetInstanceProcAddr(VkInstance instance, const char *pName) -> PFN_vkVoidFunction {
+		state.l.trace(__func__);
+		state.l.trace(pName);
 		auto iter = instance_functions.find(pName);
 		if (iter != instance_functions.end()) {
 			return iter->second;
@@ -540,10 +498,8 @@ extern "C" {
 			return iter->second;
 		}
 		{
-			std::shared_lock lock(state.global_lock);
-			return state.instance_dispatch[get_key(instance)].vkGetInstanceProcAddr(
-				instance, pName
-			);
+			PFN_vkGetInstanceProcAddr func = state.device_dispatch.read()->at(get_key(instance)).vkGetInstanceProcAddr;
+			return func(instance, pName);
 		}
 	}
 

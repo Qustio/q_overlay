@@ -37,7 +37,9 @@ target_sources(
 
 target_sources(
 	q_overlay
-	PRIVATE FILE_SET CXX_MODULES FILES src/global_state.cppm
+	PRIVATE FILE_SET CXX_MODULES FILES
+	src/global_state.cppm
+	misc/rcu.cppm
 )
 target_link_libraries(q_overlay PRIVATE spdlog::spdlog Vulkan::Headers)
 if(VulkanUtilityLibraries_FOUND)

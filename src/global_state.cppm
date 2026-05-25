@@ -21,6 +21,7 @@ module;
 #include <vulkan/vulkan_raii.hpp>
 
 export module global_state;
+import rcu;
 
 // use the loader's dispatch table pointer as a key for dispatch map lookups
 export template <typename DispatchableType>
@@ -73,7 +74,7 @@ export class globals {
 	~globals() {
 		l.trace(__func__);
 
-		auto sw_data = _swapchain_data.load();
+		auto sw_data = _swapchain_data.read();
 		for (const auto &[swapchain, data] : *sw_data) {
 			l.info(
 				"Swapchain: {} w: {} h: {}",
@@ -122,10 +123,7 @@ export class globals {
 	double frametime = 0;
 	std::atomic_size_t count{0};
 	std::shared_mutex sw_lock;
-	std::map<void *, vk::Instance> instance_map;
-	std::map<void *, vk::detail::DispatchLoaderDynamic> instance_dispatch;
-	std::map<void *, vk::detail::DispatchLoaderDynamic> device_dispatch;
-	std::shared_mutex global_lock;
+
 	std::chrono::time_point<std::chrono::high_resolution_clock> last_frame = std::chrono::high_resolution_clock::now();
 
 	std::shared_mutex init_info_lock;
@@ -144,7 +142,7 @@ export class globals {
 
 		auto logger = spdlog::logger("q_overlay", spdlog::sinks_init_list{file_sink, stdout_sink});
 		logger.set_level(spdlog::level::trace);
-		logger.flush_on(spdlog::level::debug);
+		logger.flush_on(spdlog::level::trace);
 
 		return logger;
 	}
@@ -205,8 +203,7 @@ export class globals {
 	}
 	void init_swapchain_data(vk::Device device, vk::SwapchainKHR sw, vk::Format format, vk::Extent2D extent) {
 		l.debug(__func__);
-		std::shared_lock lock(global_lock);
-		const auto &dld = device_dispatch[get_key(device)];
+		const auto &dld = device_dispatch.read()->at(get_key(device));
 		auto images = device.getSwapchainImagesKHR(sw, dld);
 		if (!images) {
 			l.error("Can't get swapchain images: {}", vk::to_string(images.error()));
@@ -234,8 +231,7 @@ export class globals {
 			}
 			image_views.push_back(std::move(image_view.value()));
 		}
-		auto sw_data = _swapchain_data.load();
-		modify(_swapchain_data, [&](SwapchainMap &sw_data) -> void {
+		_swapchain_data.mutate([&](SwapchainMap &sw_data) -> void {
 			auto entry = std::make_shared<const swapchain_data>(swapchain_data{
 				.extent = extent,
 				.images = std::move(images_value),
@@ -248,12 +244,17 @@ export class globals {
 		});
 		l.debug("fine");
 	}
+
 	void remove_swapchain_data(VkSwapchainKHR sw) {
-		modify(_swapchain_data, [&](SwapchainMap &sw_data) -> void {
+		_swapchain_data.mutate([&](SwapchainMap &sw_data) -> void {
 			sw_data.erase(sw);
 		});
 	}
+
+	rcu<std::map<void *, vk::Instance>> instance_map;
+	rcu<std::map<void *, vk::detail::DispatchLoaderDynamic>> instance_dispatch;
+	rcu<std::map<void *, vk::detail::DispatchLoaderDynamic>> device_dispatch;
 	private:
 
-	std::atomic<std::shared_ptr<const SwapchainMap>> _swapchain_data{std::make_shared<const SwapchainMap>()};
+	rcu<SwapchainMap> _swapchain_data;
 };
