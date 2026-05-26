@@ -1,6 +1,7 @@
 CompileFlags:
   # CompilationDatabase: .build
   Add:
+    - --experimental-modules-support
     - -Wall
     - -Wextra
     - -Wpedantic

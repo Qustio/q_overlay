@@ -50,8 +50,8 @@ namespace {
 				state.l.trace(name);
 
 				auto *data = reinterpret_cast<loader_data *>(user_data);
-				PFN_vkGetDeviceProcAddr device_func = state.device_dispatch.read()->at(data->device).vkGetDeviceProcAddr;
-				PFN_vkGetInstanceProcAddr instance_func = state.instance_dispatch.read()->at(data->instance).vkGetInstanceProcAddr;
+				PFN_vkGetDeviceProcAddr device_func = state.device_dispatch.read()->at(get_key(data->device)).vkGetDeviceProcAddr;
+				PFN_vkGetInstanceProcAddr instance_func = state.instance_dispatch.read()->at(get_key(data->instance)).vkGetInstanceProcAddr;
 				auto device_addr = device_func(data->device, name);
 				if (device_addr) {
 					state.l.trace("device");
@@ -122,17 +122,19 @@ namespace {
 		vk::detail::DispatchLoaderDynamic dispatchTable{*pInstance, gipa};
 
 		vk::Instance instance{*pInstance};
-		// state.instance_dispatch.mutate([&](auto &i_dld) {
-		// 	i_dld[get_key(instance)] = dispatchTable;
-		// });
-		// state.instance_map.mutate([&](auto &i_map) {
-		// 	i_map[get_key(instance)] = instance;
-		// });
+		state.instance_dispatch.mutate([&](auto &i_dld) {
+			i_dld[get_key(instance)] = dispatchTable;
+		});
+		state.instance_map.mutate([&](auto &i_map) {
+			i_map[get_key(instance)] = instance;
+		});
 
-		// state.update_imgui_init_info([&](auto &info) -> void {
-		// 	info.Instance = *pInstance;
-		// 	info.ApiVersion = pCreateInfo->pApplicationInfo->apiVersion;
-		// });
+		state.update_imgui_init_info([&](auto &info) -> void {
+			info.Instance = *pInstance;
+			info.UseDynamicRendering = true;
+			info.ApiVersion = pCreateInfo->pApplicationInfo->apiVersion;
+			info.DescriptorPoolSize = 64;
+		});
 
 		return VK_SUCCESS;
 	}
@@ -188,7 +190,7 @@ namespace {
 		vk::detail::DispatchLoaderDynamic copy_dld = state.instance_dispatch.read()->at(get_key(physicalDevice));
 		copy_dld.vkGetDeviceProcAddr = gdpa;
 		copy_dld.init(device);
-		state.device_dispatch.mutate([&](auto d_dld) {
+		state.device_dispatch.mutate([&](auto &d_dld) {
 			d_dld[get_key(device)] = copy_dld;
 		});
 
@@ -297,11 +299,7 @@ namespace {
 		PFN_vkCreateRenderPass func = state.device_dispatch.read()->at(get_key(device)).vkCreateRenderPass;
 
 		auto result = func(device, pCreateInfo, pAllocator, pRenderPass);
-		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-			info.PipelineInfoMain.RenderPass = *pRenderPass;
-			info.PipelineInfoMain.Subpass = 0;
-			state.l.info("PipelineInfoMain.RenderPass");
-		});
+
 		// g.create_render_pass(device, pCreateInfo->pAttachments->format);
 		return result;
 	}
@@ -331,11 +329,19 @@ namespace {
 		state.init_swapchain_data(
 			device,
 			*pSwapchain,
-			vk::Format(pCreateInfo->imageFormat),
-			pCreateInfo->imageExtent
+			*pCreateInfo
 		);
 		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+			state.swapchain_color_format = vk::Format{pCreateInfo->imageFormat};
+			auto pci = vk::PipelineRenderingCreateInfo(
+				0,							             // viewMask
+				1,							   // colorAttachmentCount
+				&state.swapchain_color_format, // pColorAttachmentFormats
+				vk::Format::eUndefined,		   // depthAttachmentFormat
+				vk::Format::eUndefined		   // stencilAttachmentFormat
+			);
 			info.MinImageCount = pCreateInfo->minImageCount;
+			info.PipelineInfoMain.PipelineRenderingCreateInfo = pci;
 			state.l.info("MinImageCount: {}", pCreateInfo->minImageCount);
 		});
 		return result;
@@ -366,7 +372,7 @@ namespace {
 
 		PFN_vkDestroyDevice func = state.device_dispatch.read()->at(get_key(device)).vkDestroyDevice;
 
-		state.device_dispatch.mutate([&](auto d_dld) {
+		state.device_dispatch.mutate([&](auto &d_dld) {
 			d_dld.erase(get_key(device));
 		});
 		func(device, pAllocator);
@@ -434,6 +440,21 @@ namespace {
 		// }
 		func(commandBuffer, pSubpassEndInfo);
 	}
+
+	VKAPI_ATTR void VKAPI_CALL
+	Q_CmdEndRendering(
+		VkCommandBuffer commandBuffer
+	) {
+		state.l.trace(__func__);
+
+		PFN_vkCmdEndRendering func = state.device_dispatch.read()->at(get_key(commandBuffer)).vkCmdEndRendering;
+
+		auto *data = state.imgui();
+		if (data != nullptr) {
+			ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
+		}
+		func(commandBuffer);
+	}
 } // namespace
 
 extern "C" EXPORT VKAPI_ATTR auto VKAPI_CALL
@@ -456,6 +477,8 @@ static const std::map<std::string_view, PFN_vkVoidFunction> device_functions{
 	{"vkCmdEndRenderPass", reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass)},
 	{"vkCmdEndRenderPass2", reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass2)},
 	{"vkCmdEndRenderPass2KHR", reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRenderPass2)},
+	{"vkCmdEndRendering", reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRendering)},
+	{"vkCmdEndRenderingKHR", reinterpret_cast<PFN_vkVoidFunction>(&Q_CmdEndRendering)},
 };
 
 static const std::map<std::string_view, PFN_vkVoidFunction> instance_functions = {
@@ -472,9 +495,6 @@ static const std::map<std::string_view, PFN_vkVoidFunction> instance_functions =
 extern "C" {
 	EXPORT VKAPI_ATTR auto VKAPI_CALL
 	Q_GetDeviceProcAddr(VkDevice device, const char *pName) -> PFN_vkVoidFunction {
-		state.l.trace(__func__);
-		state.l.trace(pName);
-
 		auto iter = device_functions.find(pName);
 		if (iter != device_functions.end()) {
 			return iter->second;
@@ -487,8 +507,6 @@ extern "C" {
 
 	EXPORT VKAPI_ATTR auto VKAPI_CALL
 	Q_GetInstanceProcAddr(VkInstance instance, const char *pName) -> PFN_vkVoidFunction {
-		state.l.trace(__func__);
-		state.l.trace(pName);
 		auto iter = instance_functions.find(pName);
 		if (iter != instance_functions.end()) {
 			return iter->second;
@@ -498,7 +516,7 @@ extern "C" {
 			return iter->second;
 		}
 		{
-			PFN_vkGetInstanceProcAddr func = state.device_dispatch.read()->at(get_key(instance)).vkGetInstanceProcAddr;
+			PFN_vkGetInstanceProcAddr func = state.instance_dispatch.read()->at(get_key(instance)).vkGetInstanceProcAddr;
 			return func(instance, pName);
 		}
 	}

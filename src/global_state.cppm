@@ -128,6 +128,8 @@ export class globals {
 
 	std::shared_mutex init_info_lock;
 	ImGui_ImplVulkan_InitInfo init_info = {};
+	// Must outlive init_info and be written only under init_info_lock.
+	vk::Format swapchain_color_format = vk::Format::eUndefined;
 
 	vk::DescriptorPool descriptor_pool;
 	vk::RenderPass render_pass;
@@ -182,9 +184,17 @@ export class globals {
 				l.warn("init_imgui: ImageCount 0");
 				ready = false;
 			}
-			if (init_info.PipelineInfoMain.RenderPass == VK_NULL_HANDLE) {
-				l.warn("init_imgui: RenderPass null");
-				ready = false;
+			if (init_info.UseDynamicRendering) {
+				const auto &pr = init_info.PipelineInfoMain.PipelineRenderingCreateInfo;
+				if (pr.colorAttachmentCount == 0 || pr.pColorAttachmentFormats == nullptr) {
+					l.warn("init_imgui: PipelineRenderingCreateInfo not set");
+					ready = false;
+				}
+			} else {
+				if (init_info.PipelineInfoMain.RenderPass == VK_NULL_HANDLE) {
+					l.warn("init_imgui: RenderPass null");
+					ready = false;
+				}
 			}
 			if (!ready) {
 				return;
@@ -201,8 +211,12 @@ export class globals {
 			}
 		}
 	}
-	void init_swapchain_data(vk::Device device, vk::SwapchainKHR sw, vk::Format format, vk::Extent2D extent) {
+	void init_swapchain_data(vk::Device device, vk::SwapchainKHR sw, const vk::SwapchainCreateInfoKHR &create_info) {
 		l.debug(__func__);
+		const auto format = create_info.imageFormat;
+		const auto extent = create_info.imageExtent;
+
+		
 		const auto &dld = device_dispatch.read()->at(get_key(device));
 		auto images = device.getSwapchainImagesKHR(sw, dld);
 		if (!images) {
@@ -210,6 +224,9 @@ export class globals {
 			return;
 		}
 		auto images_value = std::move(*images);
+		update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
+			info.ImageCount = images_value.size();
+		});
 		vk::ImageViewCreateInfo info{};
 		info.viewType = vk::ImageViewType::e2D;
 		info.format = format;
