@@ -6,10 +6,8 @@ option(ENABLE_COVERAGE "Enable code coverage reporting" ON)
 option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
 
 set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 set(IMGUI_DIR third_party/imgui)
 
 find_package(GTest REQUIRED)
@@ -34,13 +32,12 @@ target_sources(
 		${IMGUI_DIR}/imgui_demo.cpp
 		${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
 )
-
-target_sources(
+target_include_directories(
 	q_overlay
-	PRIVATE FILE_SET CXX_MODULES FILES
-	src/global_state.cppm
-	misc/rcu.cppm
+	PRIVATE
+	${CMAKE_CURRENT_SOURCE_DIR}
 )
+
 target_link_libraries(q_overlay PRIVATE spdlog::spdlog Vulkan::Headers)
 if(VulkanUtilityLibraries_FOUND)
 	target_link_libraries(
@@ -66,9 +63,15 @@ set(
 message(STATUS ${LAYER_LIBRARY_PATH})
 
 if(WIN32)
+	target_sources(
+		q_overlay
+		PUBLIC
+		${IMGUI_DIR}/backends/imgui_impl_win32.cpp
+
+	)
 	target_compile_definitions(
 		q_overlay
-		PUBLIC VK_USE_PLATFORM_WIN32_KHR WIN32_LEAN_AND_MEAN NOMINMAX NOGDI
+		PUBLIC VK_USE_PLATFORM_WIN32_KHR WIN32_LEAN_AND_MEAN NOMINMAX
 	)
 endif()
 

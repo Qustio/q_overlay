@@ -1,11 +1,9 @@
-module;
 #include <atomic>
 #include <memory>
 #include <string>
 #include <concepts>
-export module rcu;
 
-export template <typename T>
+template <typename T>
 class rcu {
 	public:
 

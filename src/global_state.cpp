@@ -1,9 +1,8 @@
-module;
-
 #include <chrono>
 #include <cstdint>
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
+#include <imgui_impl_win32.h>
 #include <map>
 #include <memory>
 #include <shared_mutex>
@@ -20,11 +19,10 @@ module;
 #include <vulkan/vulkan_core.h>
 #include <vulkan/vulkan_raii.hpp>
 
-export module global_state;
-import rcu;
+#include "misc/rcu.cpp"
 
 // use the loader's dispatch table pointer as a key for dispatch map lookups
-export template <typename DispatchableType>
+template <typename DispatchableType>
 auto get_key(const DispatchableType &inst) -> void * {
 	if constexpr (requires { typename DispatchableType::NativeType; }) {
 		auto ctype = static_cast<typename DispatchableType::NativeType>(inst);
@@ -34,30 +32,9 @@ auto get_key(const DispatchableType &inst) -> void * {
 	}
 }
 
-export template <typename T>
-void modify(
-	std::atomic<std::shared_ptr<const T>> &value,
-	std::type_identity_t<std::function<void(T &)>> fn
-) {
-	std::shared_ptr<const T> current = value.load();
-	while (true) {
-		// copy
-		std::shared_ptr<T> next = std::make_shared<T>(*current);
-		// modify
-		fn(*next);
-		// store
-		std::shared_ptr<const T> expected = current;
-		if (value.compare_exchange_weak(expected, std::move(next))) {
-			break;
-		}
-
-		current = expected;
-	}
-}
-
 using fn_map = std::map<void *, vk::detail::DispatchLoaderDynamic>;
 
-export class globals {
+class globals {
 	struct swapchain_data {
 		vk::Extent2D extent;
 		std::vector<vk::Image> images;
@@ -94,10 +71,17 @@ export class globals {
 		&ImGui::DestroyContext
 	};
 	std::atomic_bool imgui_rendered{false};
+#ifdef _WIN32
+	struct {
+		HWND hwnd = nullptr;
+		WNDPROC original_wndproc = nullptr;
+	} win32_hook;
+#endif
 	bool imgui_initialized{false};
 	auto shutdown_imgui() -> void {
 		if (imgui_initialized) {
 			ImGui_ImplVulkan_Shutdown();
+			ImGui_ImplWin32_Shutdown();
 			imgui_initialized = false;
 			imgui_rendered.store(false);
 		}
@@ -108,6 +92,7 @@ export class globals {
 			return nullptr;
 		}
 		ImGui_ImplVulkan_NewFrame();
+		ImGui_ImplWin32_NewFrame();
 		ImGui::NewFrame();
 
 		ImGui::Begin("q_overlay", nullptr);
@@ -216,7 +201,6 @@ export class globals {
 		const auto format = create_info.imageFormat;
 		const auto extent = create_info.imageExtent;
 
-		
 		const auto &dld = device_dispatch.read()->at(get_key(device));
 		auto images = device.getSwapchainImagesKHR(sw, dld);
 		if (!images) {

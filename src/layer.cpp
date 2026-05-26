@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
+#include <imgui_impl_win32.h>
 #include <map>
 #include <mutex>
 #include <ratio>
@@ -13,7 +14,7 @@
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_core.h>
 
-import global_state;
+#include "src/global_state.cpp"
 
 #undef EXPORT
 #ifdef _WIN32
@@ -21,6 +22,8 @@ import global_state;
 #else
 	#define EXPORT
 #endif
+
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 namespace {
 	globals state;
@@ -208,6 +211,49 @@ namespace {
 	}
 
 #ifdef VK_USE_PLATFORM_WIN32_KHR
+
+	static LRESULT CALLBACK Q_HookedWndProc(
+		HWND hwnd,
+		UINT msg,
+		WPARAM wParam,
+		LPARAM lParam
+	) {
+		// Let ImGui see the message first.
+		if (ImGui::GetCurrentContext() != nullptr) {
+			ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
+
+			// If ImGui currently wants the input, swallow it.
+			ImGuiIO &io = ImGui::GetIO();
+			switch (msg) {
+				case WM_LBUTTONDOWN:
+				case WM_LBUTTONUP:
+				case WM_LBUTTONDBLCLK:
+				case WM_RBUTTONDOWN:
+				case WM_RBUTTONUP:
+				case WM_RBUTTONDBLCLK:
+				case WM_MBUTTONDOWN:
+				case WM_MBUTTONUP:
+				case WM_MBUTTONDBLCLK:
+				case WM_XBUTTONDOWN:
+				case WM_XBUTTONUP:
+				case WM_MOUSEWHEEL:
+				case WM_MOUSEHWHEEL:
+					if (io.WantCaptureMouse) return 0;
+					break;
+				case WM_KEYDOWN:
+				case WM_KEYUP:
+				case WM_SYSKEYDOWN:
+				case WM_SYSKEYUP:
+				case WM_CHAR:
+					if (io.WantCaptureKeyboard) return 0;
+					break;
+			}
+		}
+
+		// Forward to whatever the app originally installed.
+		return CallWindowProcW(state.win32_hook.original_wndproc, hwnd, msg, wParam, lParam);
+	}
+
 	VKAPI_ATTR auto VKAPI_CALL
 	Q_CreateWin32Surface(
 		VkInstance instance,
@@ -219,9 +265,19 @@ namespace {
 
 		PFN_vkCreateWin32SurfaceKHR func = state.instance_dispatch.read()->at(get_key(instance)).vkCreateWin32SurfaceKHR;
 
+		HWND hwnd = pCreateInfo->hwnd;
+		if (state.win32_hook.hwnd != hwnd) {
+			ImGui_ImplWin32_Init(pCreateInfo->hwnd);
+			state.win32_hook.hwnd = hwnd;
+			state.win32_hook.original_wndproc = reinterpret_cast<WNDPROC>(
+				SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&Q_HookedWndProc))
+			);
+
+			state.l.trace("win32 wndproc subclassed for hwnd {}", static_cast<void *>(hwnd));
+		}
+
 		return func(instance, pCreateInfo, pAllocator, pSurface);
 	}
-
 #endif
 
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
@@ -320,9 +376,6 @@ namespace {
 			static_cast<float>(pCreateInfo->imageExtent.width),
 			static_cast<float>(pCreateInfo->imageExtent.height)
 		);
-		ImGui::GetIO().DisplayFramebufferScale = ImVec2(
-			1.5, 1.5
-		);
 		if (result != VK_SUCCESS) {
 			return result;
 		}
@@ -334,7 +387,7 @@ namespace {
 		state.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
 			state.swapchain_color_format = vk::Format{pCreateInfo->imageFormat};
 			auto pci = vk::PipelineRenderingCreateInfo(
-				0,							             // viewMask
+				0,							   // viewMask
 				1,							   // colorAttachmentCount
 				&state.swapchain_color_format, // pColorAttachmentFormats
 				vk::Format::eUndefined,		   // depthAttachmentFormat
