@@ -282,9 +282,9 @@ namespace {
 		const VkAllocationCallbacks *pAllocator,
 		VkSurfaceKHR *pSurface
 	) -> VkResult {
-		state.l.debug(__func__);
+		s.l.debug(__func__);
 
-		PFN_vkCreateWaylandSurfaceKHR func = state.instance_dispatch.read()->at(get_key(instance)).vkCreateWaylandSurfaceKHR;
+		PFN_vkCreateWaylandSurfaceKHR func = s.instance_dispatch.read()->at(get_key(instance)).vkCreateWaylandSurfaceKHR;
 
 		return func(instance, pCreateInfo, pAllocator, pSurface);
 	}
@@ -379,7 +379,7 @@ namespace {
 			*pCreateInfo
 		);
 		s.update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-			s.swapchain_color_format = vk::Format{pCreateInfo->imageFormat};
+			s.swapchain_color_format = vk::Format(pCreateInfo->imageFormat);
 			auto pci = vk::PipelineRenderingCreateInfo(
 				0,						   // viewMask
 				1,						   // colorAttachmentCount
@@ -496,9 +496,14 @@ namespace {
 
 		PFN_vkCmdEndRendering func = s.device_dispatch.read()->at(get_key(commandBuffer)).vkCmdEndRendering;
 
-		auto *data = s.imgui();
-		if (data != nullptr) {
-			ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
+		try {
+			auto *data = s.imgui();
+
+			if (data != nullptr) {
+				ImGui_ImplVulkan_RenderDrawData(data, commandBuffer);
+			}
+		} catch (const std::exception &e) {
+			s.l.error(e.what());
 		}
 		func(commandBuffer);
 	}

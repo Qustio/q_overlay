@@ -24,17 +24,18 @@
 namespace {
 	// use the loader's dispatch table pointer as a key for dispatch map lookups
 	template <typename DispatchableType>
-	auto get_key(const DispatchableType &inst) -> void * {
+	auto get_key(const DispatchableType& inst) -> void* {
 		if constexpr (requires { typename DispatchableType::NativeType; }) {
-			auto ctype = static_cast<typename DispatchableType::NativeType>(inst);
-			return *reinterpret_cast<void **>(ctype);
+			auto ctype =
+				static_cast<typename DispatchableType::NativeType>(inst);
+			return *reinterpret_cast<void**>(ctype);
 		} else {
-			return *reinterpret_cast<void **>(inst);
+			return *reinterpret_cast<void**>(inst);
 		}
 	}
 
 	namespace state {
-		using fn_map = std::map<void *, vk::detail::DispatchLoaderDynamic>;
+		using fn_map = std::map<void*, vk::detail::DispatchLoaderDynamic>;
 
 		class state {
 			struct swapchain_data {
@@ -50,7 +51,8 @@ namespace {
 				std::vector<vk::UniqueSemaphore> done_semaphores;
 				std::vector<vk::UniqueFence> in_flight_fences;
 			};
-			using SwapchainMap = std::map<vk::SwapchainKHR, std::shared_ptr<const swapchain_data>>;
+			using SwapchainMap = std::
+				map<vk::SwapchainKHR, std::shared_ptr<const swapchain_data>>;
 			public:
 
 			state() : l(init_logger()) {
@@ -61,10 +63,12 @@ namespace {
 				l.trace(__func__);
 
 				auto sw_data = _swapchain_data.read();
-				for (const auto &[swapchain, data] : *sw_data) {
+				for (const auto& [swapchain, data] : *sw_data) {
 					l.info(
 						"Swapchain: {} w: {} h: {}",
-						reinterpret_cast<uint64_t>(static_cast<VkSwapchainKHR>(swapchain)),
+						reinterpret_cast<uint64_t>(
+							static_cast<VkSwapchainKHR>(swapchain)
+						),
 						data->extent.width,
 						data->extent.height
 					);
@@ -75,10 +79,8 @@ namespace {
 			}
 
 			// imgui context
-			std::unique_ptr<ImGuiContext, decltype(&ImGui::DestroyContext)> imgui_ctx{
-				ImGui::CreateContext(),
-				&ImGui::DestroyContext
-			};
+			std::unique_ptr<ImGuiContext, decltype(&ImGui::DestroyContext)>
+				imgui_ctx{ImGui::CreateContext(), &ImGui::DestroyContext};
 			std::atomic_bool imgui_rendered{false};
 #ifdef _WIN32
 			struct {
@@ -98,7 +100,7 @@ namespace {
 				}
 			}
 
-			auto imgui() const -> ImDrawData * {
+			auto imgui() const -> ImDrawData* {
 				if (!imgui_initialized) {
 					return nullptr;
 				}
@@ -122,7 +124,8 @@ namespace {
 			std::atomic_size_t count{0};
 			std::shared_mutex sw_lock;
 
-			std::chrono::time_point<std::chrono::high_resolution_clock> last_frame = std::chrono::high_resolution_clock::now();
+			std::chrono::time_point<std::chrono::high_resolution_clock>
+				last_frame = std::chrono::high_resolution_clock::now();
 
 			std::shared_mutex init_info_lock;
 			ImGui_ImplVulkan_InitInfo init_info = {};
@@ -132,23 +135,29 @@ namespace {
 			vk::DescriptorPool descriptor_pool;
 			vk::RenderPass render_pass;
 			static auto init_logger() -> spdlog::logger {
-				auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-					"q_overlay.log", true
-				);
-				auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+				auto file_sink =
+					std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+						"q_overlay.log", true
+					);
+				auto stdout_sink =
+					std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
 
 				file_sink->set_level(spdlog::level::trace);
 				stdout_sink->set_level(spdlog::level::debug);
 
-				auto logger = spdlog::logger("q_overlay", spdlog::sinks_init_list{file_sink, stdout_sink});
+				auto logger = spdlog::logger(
+					"q_overlay", spdlog::sinks_init_list{file_sink, stdout_sink}
+				);
 				logger.set_level(spdlog::level::trace);
 				logger.flush_on(spdlog::level::trace);
 
 				return logger;
 			}
 			template <typename F>
-			requires std::invocable<F, ImGui_ImplVulkan_InitInfo &> && std::is_void_v<std::invoke_result_t<F, ImGui_ImplVulkan_InitInfo &>>
-			auto update_imgui_init_info(F &&func) -> void {
+			requires std::invocable<F, ImGui_ImplVulkan_InitInfo&>
+				&& std::is_void_v<
+						 std::invoke_result_t<F, ImGui_ImplVulkan_InitInfo&>>
+			auto update_imgui_init_info(F&& func) -> void {
 				{
 					std::unique_lock lock{init_info_lock};
 					std::forward<F>(func)(init_info);
@@ -183,13 +192,19 @@ namespace {
 						ready = false;
 					}
 					if (init_info.UseDynamicRendering) {
-						const auto &pr = init_info.PipelineInfoMain.PipelineRenderingCreateInfo;
-						if (pr.colorAttachmentCount == 0 || pr.pColorAttachmentFormats == nullptr) {
-							l.warn("init_imgui: PipelineRenderingCreateInfo not set");
+						const auto& pr = init_info.PipelineInfoMain
+											 .PipelineRenderingCreateInfo;
+						if (pr.colorAttachmentCount == 0
+							|| pr.pColorAttachmentFormats == nullptr) {
+							l.warn(
+								"init_imgui: PipelineRenderingCreateInfo not "
+								"set"
+							);
 							ready = false;
 						}
 					} else {
-						if (init_info.PipelineInfoMain.RenderPass == VK_NULL_HANDLE) {
+						if (init_info.PipelineInfoMain.RenderPass
+							== VK_NULL_HANDLE) {
 							l.warn("init_imgui: RenderPass null");
 							ready = false;
 						}
@@ -199,7 +214,10 @@ namespace {
 					}
 				}
 				if (!imgui_rendered.exchange(true)) {
-					l.info("Calling ImGui_ImplVulkan_Init RenderPass: {:x}", (uint64_t)init_info.PipelineInfoMain.RenderPass);
+					l.info(
+						"Calling ImGui_ImplVulkan_Init RenderPass: {:x}",
+						(uint64_t)init_info.PipelineInfoMain.RenderPass
+					);
 					l.info("Calling ImGui_ImplVulkan_Init...");
 					auto res = ImGui_ImplVulkan_Init(&init_info);
 					l.info("Imgui init result: {}", res);
@@ -209,10 +227,14 @@ namespace {
 					}
 				}
 			}
-			void init_swapchain_data(vk::Device device, vk::SwapchainKHR sw, const vk::SwapchainCreateInfoKHR &create_info) {
+			void init_swapchain_data(
+				vk::Device device,
+				vk::SwapchainKHR sw,
+				const vk::SwapchainCreateInfoKHR& create_info
+			) {
 				l.debug(__func__);
 
-				const auto &dld = device_dispatch.read()->at(get_key(device));
+				const auto& dld = device_dispatch.read()->at(get_key(device));
 				swapchain_data entry{};
 				entry.image_format = create_info.imageFormat;
 				entry.extent = create_info.imageExtent;
@@ -220,14 +242,19 @@ namespace {
 				// images
 				auto images = device.getSwapchainImagesKHR(sw, dld);
 				if (!images) {
-					l.error("Can't get swapchain images: {}", vk::to_string(images.error()));
+					l.error(
+						"Can't get swapchain images: {}",
+						vk::to_string(images.error())
+					);
 					return;
 				}
 				entry.images = std::move(*images);
 				entry.image_count = entry.images.size();
-				update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-					info.ImageCount = entry.image_count;
-				});
+				update_imgui_init_info(
+					[&](ImGui_ImplVulkan_InitInfo& info) -> void {
+						info.ImageCount = entry.image_count;
+					}
+				);
 
 				// reserve other vectors
 				entry.image_views.reserve(entry.image_count);
@@ -254,48 +281,68 @@ namespace {
 					graphics_queue_index
 				};
 				vk::CommandBufferAllocateInfo cmd_buf_info{
-					{},
-					vk::CommandBufferLevel::ePrimary,
-					1
+					{}, vk::CommandBufferLevel::ePrimary, 1
 				};
-				vk::FenceCreateInfo fence_info{vk::FenceCreateFlagBits::eSignaled};
+				vk::FenceCreateInfo fence_info{
+					vk::FenceCreateFlagBits::eSignaled
+				};
 
-				for (const auto &image : entry.images) {
+				for (const auto& image : entry.images) {
 					// image_views
 					info.image = image;
-					auto image_view = device.createImageViewUnique(info, nullptr, dld);
+					auto image_view =
+						device.createImageViewUnique(info, nullptr, dld);
 					if (!image_view) {
-						l.error("Can't create image view: {}", vk::to_string(image_view.error()));
+						l.error(
+							"Can't create image view: {}",
+							vk::to_string(image_view.error())
+						);
 						return;
 					}
 					entry.image_views.push_back(std::move(*image_view));
 
 					// cmd_pools
-					auto pool = device.createCommandPoolUnique(pool_info, nullptr, dld);
+					auto pool =
+						device.createCommandPoolUnique(pool_info, nullptr, dld);
 					if (!pool) {
-						l.error("Can't create command pool: {}", vk::to_string(pool.error()));
+						l.error(
+							"Can't create command pool: {}",
+							vk::to_string(pool.error())
+						);
 						return;
 					}
 
 					// cmd_buffers
 					cmd_buf_info.commandPool = **pool;
-					auto cmd_buffer = device.allocateCommandBuffersUnique(cmd_buf_info, dld);
+					auto cmd_buffer =
+						device.allocateCommandBuffersUnique(cmd_buf_info, dld);
 					if (!cmd_buffer) {
-						l.error("Can't allocate command buffer: {}", vk::to_string(cmd_buffer.error()));
+						l.error(
+							"Can't allocate command buffer: {}",
+							vk::to_string(cmd_buffer.error())
+						);
 						return;
 					}
 
 					// done_semaphores
-					auto done_semaphore = device.createSemaphoreUnique({}, nullptr, dld);
+					auto done_semaphore =
+						device.createSemaphoreUnique({}, nullptr, dld);
 					if (!done_semaphore) {
-						l.error("Can't create semaphore: {}", vk::to_string(done_semaphore.error()));
+						l.error(
+							"Can't create semaphore: {}",
+							vk::to_string(done_semaphore.error())
+						);
 						return;
 					}
 
 					// fences
-					auto fence = device.createFenceUnique(fence_info, nullptr, dld);
+					auto fence =
+						device.createFenceUnique(fence_info, nullptr, dld);
 					if (!fence) {
-						l.error("Can't create fence: {}", vk::to_string(fence.error()));
+						l.error(
+							"Can't create fence: {}",
+							vk::to_string(fence.error())
+						);
 						return;
 					}
 
@@ -305,23 +352,91 @@ namespace {
 					entry.in_flight_fences.push_back(std::move(*fence));
 				}
 
-				_swapchain_data.mutate([&](SwapchainMap &sw_data) -> void {
+				_swapchain_data.mutate([&](SwapchainMap& sw_data) -> void {
 					sw_data.emplace(
-						sw, std::make_shared<const swapchain_data>(std::move(entry))
+						sw,
+						std::make_shared<const swapchain_data>(std::move(entry))
 					);
 				});
 				l.debug("fine");
 			}
 
 			void remove_swapchain_data(VkSwapchainKHR sw) {
-				_swapchain_data.mutate([&](SwapchainMap &sw_data) -> void {
+				_swapchain_data.mutate([&](SwapchainMap& sw_data) -> void {
 					sw_data.erase(sw);
 				});
 			}
 
-			rcu<std::map<void *, vk::Instance>> instance_map;
-			rcu<std::map<void *, vk::detail::DispatchLoaderDynamic>> instance_dispatch;
-			rcu<std::map<void *, vk::detail::DispatchLoaderDynamic>> device_dispatch;
+			void present(VkQueue& queue, const VkPresentInfoKHR* pPresentInfo) {
+				for (uint32_t i = 0; i < pPresentInfo->swapchainCount; i++) {
+					vk::SwapchainKHR s = pPresentInfo->pSwapchains[i];
+					uint32_t img_idx = pPresentInfo->pImageIndices[i];
+
+					auto sw_ptr = _swapchain_data.read()->at(s);
+					if (!sw_ptr || !imgui_initialized) {
+						continue;
+					}
+
+					vk::Device device = sw_ptr->device;
+					auto& cmd = *sw_ptr->cmd_buffers[img_idx];
+					auto& pool = *sw_ptr->cmd_pools[img_idx];
+					auto& fence = *sw_ptr->in_flight_fences[img_idx];
+					auto& image = sw_ptr->images[img_idx];
+					auto& view = *sw_ptr->image_views[img_idx];
+					const auto& dld =
+						device_dispatch.read()->at(get_key(device));
+
+					// Wait for fences to finish
+					auto _ =
+						device.waitForFences(fence, vk::True, UINT64_MAX, dld);
+					auto _ = device.resetFences(fence, dld);
+
+					// Reset command pool and begin
+					auto _ = device.resetCommandPool(pool, {}, dld);
+					auto _ = cmd.begin(
+						vk::CommandBufferBeginInfo{
+							vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+						},
+						dld
+					);
+
+					// PRESENT_SRC_KHR → COLOR_ATTACHMENT_OPTIMAL
+					vk::ImageMemoryBarrier2 b1{
+						vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+						{},
+						vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+						vk::AccessFlagBits2::eColorAttachmentWrite,
+						vk::ImageLayout::ePresentSrcKHR,
+						vk::ImageLayout::eColorAttachmentOptimal,
+						{},
+						{},
+						image,
+						{}
+					};
+					cmd.pipelineBarrier2(
+						vk::DependencyInfo{}
+							.setImageMemoryBarrierCount(1)
+							.setPImageMemoryBarriers(&b1),
+						dld
+					);
+
+					// begin rendering
+					auto rai = vk::RenderingAttachmentInfo{}
+								   .setImageView(view)
+								   .setImageLayout(
+									   vk::ImageLayout::eColorAttachmentOptimal
+								   )
+								   .setLoadOp(vk::AttachmentLoadOp::eLoad)
+								   .setStoreOp(vk::AttachmentStoreOp::eStore);
+					cmd.beginRendering();
+				}
+			}
+
+			rcu<std::map<void*, vk::Instance>> instance_map;
+			rcu<std::map<void*, vk::detail::DispatchLoaderDynamic>>
+				instance_dispatch;
+			rcu<std::map<void*, vk::detail::DispatchLoaderDynamic>>
+				device_dispatch;
 			private:
 
 			rcu<SwapchainMap> _swapchain_data;
