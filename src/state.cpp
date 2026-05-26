@@ -38,10 +38,17 @@ namespace {
 
 		class state {
 			struct swapchain_data {
+				vk::Device device;
 				vk::Extent2D extent;
 				std::vector<vk::Image> images;
 				std::vector<vk::UniqueImageView> image_views;
 				vk::Format image_format;
+				uint32_t image_count;
+
+				std::vector<vk::UniqueCommandPool> cmd_pools;
+				std::vector<vk::UniqueCommandBuffer> cmd_buffers;
+				std::vector<vk::UniqueSemaphore> done_semaphores;
+				std::vector<vk::UniqueFence> in_flight_fences;
 			};
 			using SwapchainMap = std::map<vk::SwapchainKHR, std::shared_ptr<const swapchain_data>>;
 			public:
@@ -204,22 +211,36 @@ namespace {
 			}
 			void init_swapchain_data(vk::Device device, vk::SwapchainKHR sw, const vk::SwapchainCreateInfoKHR &create_info) {
 				l.debug(__func__);
-				const auto format = create_info.imageFormat;
-				const auto extent = create_info.imageExtent;
 
 				const auto &dld = device_dispatch.read()->at(get_key(device));
+				swapchain_data entry{};
+				entry.image_format = create_info.imageFormat;
+				entry.extent = create_info.imageExtent;
+
+				// images
 				auto images = device.getSwapchainImagesKHR(sw, dld);
 				if (!images) {
 					l.error("Can't get swapchain images: {}", vk::to_string(images.error()));
 					return;
 				}
-				auto images_value = std::move(*images);
+				entry.images = std::move(*images);
+				entry.image_count = entry.images.size();
 				update_imgui_init_info([&](ImGui_ImplVulkan_InitInfo &info) -> void {
-					info.ImageCount = images_value.size();
+					info.ImageCount = entry.image_count;
 				});
+
+				// reserve other vectors
+				entry.image_views.reserve(entry.image_count);
+				entry.cmd_pools.reserve(entry.image_count);
+				entry.cmd_buffers.reserve(entry.image_count);
+				entry.done_semaphores.reserve(entry.image_count);
+				entry.in_flight_fences.reserve(entry.image_count);
+
+				// todo use init_info_lock or rcu
+				auto graphics_queue_index = init_info.QueueFamily;
 				vk::ImageViewCreateInfo info{};
 				info.viewType = vk::ImageViewType::e2D;
-				info.format = format;
+				info.format = create_info.imageFormat;
 				info.subresourceRange = {
 					vk::ImageAspectFlagBits::eColor,
 					0,
@@ -227,26 +248,66 @@ namespace {
 					0,
 					1 // array
 				};
-				std::vector<vk::UniqueImageView> image_views{};
-				image_views.reserve(images_value.size());
-				for (const auto &image : images_value) {
+				vk::CommandPoolCreateInfo pool_info{
+					vk::CommandPoolCreateFlagBits::eTransient
+						| vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+					graphics_queue_index
+				};
+				vk::CommandBufferAllocateInfo cmd_buf_info{
+					{},
+					vk::CommandBufferLevel::ePrimary,
+					1
+				};
+				vk::FenceCreateInfo fence_info{vk::FenceCreateFlagBits::eSignaled};
+
+				for (const auto &image : entry.images) {
+					// image_views
 					info.image = image;
 					auto image_view = device.createImageViewUnique(info, nullptr, dld);
 					if (!image_view) {
 						l.error("Can't create image view: {}", vk::to_string(image_view.error()));
 						return;
 					}
-					image_views.push_back(std::move(image_view.value()));
+					entry.image_views.push_back(std::move(*image_view));
+
+					// cmd_pools
+					auto pool = device.createCommandPoolUnique(pool_info, nullptr, dld);
+					if (!pool) {
+						l.error("Can't create command pool: {}", vk::to_string(pool.error()));
+						return;
+					}
+
+					// cmd_buffers
+					cmd_buf_info.commandPool = **pool;
+					auto cmd_buffer = device.allocateCommandBuffersUnique(cmd_buf_info, dld);
+					if (!cmd_buffer) {
+						l.error("Can't allocate command buffer: {}", vk::to_string(cmd_buffer.error()));
+						return;
+					}
+
+					// done_semaphores
+					auto done_semaphore = device.createSemaphoreUnique({}, nullptr, dld);
+					if (!done_semaphore) {
+						l.error("Can't create semaphore: {}", vk::to_string(done_semaphore.error()));
+						return;
+					}
+
+					// fences
+					auto fence = device.createFenceUnique(fence_info, nullptr, dld);
+					if (!fence) {
+						l.error("Can't create fence: {}", vk::to_string(fence.error()));
+						return;
+					}
+
+					entry.cmd_pools.push_back(std::move(*pool));
+					entry.cmd_buffers.push_back(std::move((*cmd_buffer)[0]));
+					entry.done_semaphores.push_back(std::move(*done_semaphore));
+					entry.in_flight_fences.push_back(std::move(*fence));
 				}
+
 				_swapchain_data.mutate([&](SwapchainMap &sw_data) -> void {
-					auto entry = std::make_shared<const swapchain_data>(swapchain_data{
-						.extent = extent,
-						.images = std::move(images_value),
-						.image_views = std::move(image_views),
-						.image_format = format,
-					});
 					sw_data.emplace(
-						sw, entry
+						sw, std::make_shared<const swapchain_data>(std::move(entry))
 					);
 				});
 				l.debug("fine");
