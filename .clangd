@@ -18,3 +18,4 @@ Diagnostics:
       - misc-*
     Remove:
       - misc-non-private-member-variables-in-classes
+      - readability-identifier-length
